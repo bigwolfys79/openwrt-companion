@@ -1,4 +1,5 @@
 mod commands;
+mod i18n;
 mod monitor;
 pub mod settings;
 pub mod snapshot;
@@ -58,6 +59,8 @@ pub fn run() {
             commands::delete_profile,
             commands::set_channel,
             commands::ssh_forget_host_key,
+            commands::set_ui_prefs,
+            commands::open_external,
         ])
         .run(tauri::generate_context!())
         .expect("error while running OpenWrt Companion");

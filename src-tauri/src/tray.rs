@@ -33,11 +33,12 @@ pub fn show_main_window(app: &AppHandle, near_cursor: bool) {
 }
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
-    let show = MenuItemBuilder::with_id("show", "Show panel").build(app)?;
-    let wifi24 = MenuItemBuilder::with_id("wifi24", "Reboot Wi-Fi 2.4 GHz").build(app)?;
-    let wifi5 = MenuItemBuilder::with_id("wifi5", "Reboot Wi-Fi 5 GHz").build(app)?;
-    let reboot = MenuItemBuilder::with_id("reboot", "Reboot router").build(app)?;
-    let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+    let lang = crate::i18n::lang(app);
+    let show = MenuItemBuilder::with_id("show", crate::i18n::tr(lang, "Показать панель", "Show panel")).build(app)?;
+    let wifi24 = MenuItemBuilder::with_id("wifi24", crate::i18n::tr(lang, "Перезагрузить Wi-Fi 2.4 ГГц", "Reboot Wi-Fi 2.4 GHz")).build(app)?;
+    let wifi5 = MenuItemBuilder::with_id("wifi5", crate::i18n::tr(lang, "Перезагрузить Wi-Fi 5 ГГц", "Reboot Wi-Fi 5 GHz")).build(app)?;
+    let reboot = MenuItemBuilder::with_id("reboot", crate::i18n::tr(lang, "Перезагрузить роутер", "Reboot router")).build(app)?;
+    let quit = MenuItemBuilder::with_id("quit", crate::i18n::tr(lang, "Выход", "Quit")).build(app)?;
     let sep1 = tauri::menu::PredefinedMenuItem::separator(app)?;
     let sep2 = tauri::menu::PredefinedMenuItem::separator(app)?;
     let sep3 = tauri::menu::PredefinedMenuItem::separator(app)?;

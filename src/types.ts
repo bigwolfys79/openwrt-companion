@@ -75,4 +75,6 @@ export interface Settings {
   pinned: string[];
   profiles: RouterProfile[];
   activeProfile: number;
+  language: string;
+  theme: string;
 }

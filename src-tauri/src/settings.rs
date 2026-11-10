@@ -37,6 +37,20 @@ pub struct Settings {
     /// index of the active profile in `profiles`
     #[serde(default)]
     pub active_profile: usize,
+    /// UI language: "ru" | "en"
+    #[serde(default = "default_language")]
+    pub language: String,
+    /// UI theme: "dark" | "light"
+    #[serde(default = "default_theme")]
+    pub theme: String,
+}
+
+fn default_language() -> String {
+    "ru".into()
+}
+
+fn default_theme() -> String {
+    "dark".into()
 }
 
 fn default_true() -> bool {
@@ -77,6 +91,8 @@ impl Default for Settings {
             pinned: Vec::new(),
             profiles: Vec::new(),
             active_profile: 0,
+            language: default_language(),
+            theme: default_theme(),
         }
     }
 }

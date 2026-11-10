@@ -665,18 +665,43 @@ pub async fn build_snapshot(state: &AppState) -> Result<Snapshot, String> {
         }
     }
 
-    // SoC temperature (millidegrees Celsius)
+    // SoC temperature. thermal_zone0 is NOT always the CPU sensor: on x86 it is
+    // usually the ACPI ambient zone (acpitz), some SoC zones sit at a fixed
+    // value or refresh rarely (see openwrt issue #6121). Read every thermal
+    // zone + hwmon input and take the max — the CPU die is the hottest sensor.
+    let mut temps: Vec<f64> = Vec::new();
+    let zone_script = "for z in /sys/class/thermal/thermal_zone*/temp /sys/class/hwmon/hwmon*/temp*_input; do cat \"$z\" 2>/dev/null; done";
     if let Ok(ex) = client
-        .call("file", "exec", json!({"command": "/bin/cat", "params": ["/sys/class/thermal/thermal_zone0/temp"]}))
+        .call("file", "exec", json!({"command": "/bin/sh", "params": ["-c", zone_script]}))
         .await
     {
         if let Some(txt) = ex.get("stdout").and_then(|s| s.as_str()) {
-            if let Ok(milli) = txt.trim().parse::<f64>() {
-                if milli > 0.0 {
-                    stats.temp = Some((milli / 1000.0 * 10.0).round() / 10.0);
+            for v in txt.split_whitespace() {
+                if let Ok(milli) = v.trim().parse::<f64>() {
+                    if milli > 0.0 && milli < 150_000.0 { // plausible °C×1000
+                        temps.push(milli);
+                    }
                 }
             }
         }
+    }
+    // fallback for limited ACLs (only /bin/cat exec is permitted): zone0 as before
+    if temps.is_empty() {
+        if let Ok(ex) = client
+            .call("file", "exec", json!({"command": "/bin/cat", "params": ["/sys/class/thermal/thermal_zone0/temp"]}))
+            .await
+        {
+            if let Some(txt) = ex.get("stdout").and_then(|s| s.as_str()) {
+                if let Ok(milli) = txt.trim().parse::<f64>() {
+                    if milli > 0.0 {
+                        temps.push(milli);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(milli) = temps.iter().cloned().fold(None::<f64>, |a, b| Some(a.map_or(b, |m: f64| m.max(b)))) {
+        stats.temp = Some((milli / 1000.0 * 10.0).round() / 10.0);
     }
 
     // detect limited ACLs: iwinfo must be callable for full Wi-Fi client data

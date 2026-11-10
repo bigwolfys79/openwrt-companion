@@ -1,20 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isEnabled as autostartIsEnabled, enable as autostartEnable, disable as autostartDisable } from "@tauri-apps/plugin-autostart";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import type { Device, Radio, Settings, Snapshot } from "./types";
+import { t, setLang, getLang, normalizeLang, REPO_URL, type Lang } from "./i18n";
 
 /* ---------- helpers ---------- */
 
-// speed in bits/s, formatted like Windows Task Manager (кбит/с, Мбит/с)
+// speed in bits/s, formatted like Windows Task Manager
 function fmtBits(bytesPerSec: number | null): string {
   if (bytesPerSec == null || !Number.isFinite(bytesPerSec)) return "—";
   const bits = bytesPerSec * 8;
-  if (bits < 1_000_000) return `${(bits / 1000).toFixed(bits < 10_000 ? 1 : 0)} кбит/с`;
-  if (bits < 1_000_000_000) return `${(bits / 1_000_000).toFixed(1)} Мбит/с`;
-  return `${(bits / 1_000_000_000).toFixed(2)} Гбит/с`;
+  if (bits < 1_000_000) return `${(bits / 1000).toFixed(bits < 10_000 ? 1 : 0)} ${t("u.kbit")}`;
+  if (bits < 1_000_000_000) return `${(bits / 1_000_000).toFixed(1)} ${t("u.mbit")}`;
+  return `${(bits / 1_000_000_000).toFixed(2)} ${t("u.gbit")}`;
 }
 
 // compact rate for device cards ("1.2М", "350к", "—")
@@ -31,7 +33,7 @@ function fmtUptime(sec: number | null): string {
   const d = Math.floor(sec / 86400);
   const h = Math.floor((sec % 86400) / 3600);
   const m = Math.floor((sec % 3600) / 60);
-  return d > 0 ? `${d}д ${h}ч` : h > 0 ? `${h}ч ${m}м` : `${m}м`;
+  return d > 0 ? `${d}${t("u.d")} ${h}${t("u.h")}` : h > 0 ? `${h}${t("u.h")} ${m}${t("u.m")}` : `${m}${t("u.m")}`;
 }
 
 function signalQuality(dbm: number | null): number {
@@ -50,17 +52,7 @@ const KIND_ICONS: Record<string, string> = {
   pc: "🖥️",
 };
 
-const KIND_OPTIONS: [string, string][] = [
-  ["auto", "✨ Авто"],
-  ["pc", "🖥️ ПК"],
-  ["laptop", "💻 Ноутбук"],
-  ["phone", "📱 Телефон"],
-  ["tablet", "📲 Планшет"],
-  ["tv", "📺 ТВ / приставка"],
-  ["printer", "🖨️ Принтер"],
-  ["watch", "⌚ Часы"],
-  ["iot", "💡 Умный дом"],
-];
+const KIND_KEYS = ["auto", "pc", "laptop", "phone", "tablet", "tv", "printer", "watch", "iot"];
 
 function bandLabel(band: string | null): string {
   if (band === "2G") return "2.4 ГГц";
@@ -79,10 +71,10 @@ function TitleBar({ onSettings, settingsOpen }: { onSettings: () => void; settin
         <span data-tauri-drag-region>OpenWrt Companion</span>
       </div>
       <div className="titlebar-actions">
-        <button className="icon-btn" title="Настройки" onClick={onSettings}>
+        <button className="icon-btn" title={t("tb.settings")} onClick={onSettings}>
           {settingsOpen ? "✕" : "⚙"}
         </button>
-        <button className="icon-btn" title="Свернуть" onClick={() => getCurrentWindow().hide()}>
+        <button className="icon-btn" title={t("tb.hide")} onClick={() => getCurrentWindow().hide()}>
           ─
         </button>
       </div>
@@ -101,8 +93,8 @@ function Sparkline({ hist }: { hist: { d: number; u: number }[] }) {
   const up = hist.map((p) => p.u / max);
   return (
     <svg className="spark" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-      <polyline points={line(down)} fill="none" stroke="#5cd694" strokeWidth="1.5" opacity="0.95" />
-      <polyline points={line(up)} fill="none" stroke="#6ea8ff" strokeWidth="1" opacity="0.7" />
+      <polyline points={line(down)} fill="none" stroke="var(--spark-down)" strokeWidth="1.5" opacity="0.95" />
+      <polyline points={line(up)} fill="none" stroke="var(--spark-up)" strokeWidth="1" opacity="0.7" />
     </svg>
   );
 }
@@ -159,7 +151,7 @@ function StatsBar({ snap, prev, intervalSecs, rows }: { snap: Snapshot; prev: Re
   const speedLabel = busiest == null ? null : isSplit ? busiest.iface : `⇅ ${busiest.iface}`;
   // aggregated port + offload: explain why directions can't be split
   const aggregateHint = !isSplit && busiest != null && s.offload
-    ? `HW offload (${s.offload}) включён: offload-трафик не учитывается счётчиками портов, показывается суммарно через ${busiest.iface}. Для точного ↓/↑ отключите offload в LuCI (Сеть→Брандмауэр) — при тарифе до ~500 Мбит/с это безопасно.`
+    ? t("stats.offloadHint", { offload: s.offload, iface: busiest.iface })
     : null;
 
   // traffic history ring buffer for the WAN sparkline (last ~72 polls ≈ 6 мин при 5с)
@@ -171,43 +163,34 @@ function StatsBar({ snap, prev, intervalSecs, rows }: { snap: Snapshot; prev: Re
     histPushed.current = snap.ts;
     histRef.current.push({ d: downSpeed ?? 0, u: upSpeed ?? 0 });
     if (histRef.current.length > 72) histRef.current.shift();
-    bumpHist((t) => t + 1);
+    bumpHist((n) => n + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snap.ts]);
   const memUsed = s.memTotal != null && s.memFree != null ? s.memTotal - s.memFree : null;
   const memPct = memUsed != null && s.memTotal ? Math.round((memUsed / s.memTotal) * 100) : null;
-  const load = s.load?.[0];
 
   return (
     <div className={`stats-grid rows-${rows}`}>
       <div className="stat">
-        <div className="stat-label">Uptime</div>
+        <div className="stat-label">{t("stats.uptime")}</div>
         <div className="stat-value">{fmtUptime(s.uptime)}</div>
       </div>
-      <div className="stat">
-        <div className="stat-label">Load</div>
-        <div className="stat-value">{load != null ? load.toFixed(2) : "—"}</div>
-      </div>
-      <div className="stat" title={aggregateHint ?? (speedLabel ? `Канал: ${speedLabel}` : undefined)}>
+      <div className="stat" title={aggregateHint ?? (speedLabel ? t("stats.link", { v: speedLabel }) : undefined)}>
         <div className="stat-label">↓ / ↑{speedLabel ? ` · ${speedLabel}` : ""}</div>
         <div className="stat-value">
           {fmtBits(downSpeed)}
           <span className="stat-dim"> / {fmtBits(upSpeed)}</span>
         </div>
-        {aggregateHint && <div className="stat-hint">⇅ offload</div>}
+        {aggregateHint && <div className="stat-hint">{t("stats.offload")}</div>}
         <Sparkline hist={histRef.current} />
       </div>
       <div className="stat">
-        <div className="stat-label">RAM</div>
+        <div className="stat-label">{t("stats.ram")}</div>
         <div className="stat-value">{memPct != null ? `${memPct}%` : "—"}</div>
       </div>
       <div className="stat">
-        <div className="stat-label">Temp</div>
+        <div className="stat-label">{t("stats.temp")}</div>
         <div className="stat-value">{s.temp != null ? `${Math.round(s.temp)}°` : "—"}</div>
-      </div>
-      <div className="stat wan" title={s.wanIface ? `Канал: ${s.wanIface}` : undefined}>
-        <div className="stat-label">WAN{s.wanIface ? ` · ${speedLabel?.replace("⇅ ", "") ?? s.wanIface}` : ""}</div>
-        <div className="stat-value">{s.wanIp ?? "—"}</div>
       </div>
     </div>
   );
@@ -233,7 +216,7 @@ function RadioControls({
               <div className="radio-title">
                 <span className={`radio-led ${r.up ? "on" : "off"}`} />
                 <b>{bandLabel(r.band)}</b>
-                <span className="radio-dim">{r.channel != null ? `кан. ${r.channel}` : ""}</span>
+                <span className="radio-dim">{r.channel != null ? t("radio.ch", { n: r.channel }) : ""}</span>
               </div>
               <div className="radio-ssid">{ssid}</div>
             </div>
@@ -241,7 +224,7 @@ function RadioControls({
               className="icon-btn"
               disabled={!r.up}
               onClick={() => onScan(r.networks[0]?.ifname ?? "", r.device, r.channel, r.width ?? 20, r.band)}
-              title="Сканировать сети вокруг"
+              title={t("radio.scan")}
             >
               📡
             </button>
@@ -249,7 +232,7 @@ function RadioControls({
               className="btn btn-ghost"
               disabled={busyHere || !r.up}
               onClick={() => onReboot(r.device)}
-              title={`Перезагрузить ${bandLabel(r.band)}`}
+              title={t("radio.reboot", { band: bandLabel(r.band) })}
             >
               {busyHere ? <span className="spinner" /> : "⟳"}
             </button>
@@ -285,20 +268,19 @@ function LimitedBanner({ onFixed }: { onFixed: () => void }) {
   return (
     <div className="limited-banner">
       <div className="limited-text">
-        ⚠️ Ограниченный режим: сессия LuCI не даёт доступа к <code>iwinfo</code>/<code>hostapd</code>.
-        Wi-Fi-клиенты могут не отображаться, отключение работает не полностью.
+        ⚠️ {t("limited.text1")}<code>iwinfo</code>/<code>hostapd</code>{t("limited.text2")}
       </div>
       <button className="btn btn-primary" disabled={fixing} onClick={runFix}>
-        {fixing ? <span className="spinner" /> : "🔑 Исправить автоматически (SSH)"}
+        {fixing ? <span className="spinner" /> : t("limited.fix")}
       </button>
-      {fixErr && <div className="limited-hint err">Ошибка: {fixErr}</div>}
-      <div className="limited-hint">Либо выполните команду вручную по SSH:</div>
-      <div className="limited-cmd" onClick={() => { navigator.clipboard.writeText(cmd); setCopied(true); setTimeout(() => setCopied(false), 1500); }} title="Нажмите, чтобы скопировать">
+      {fixErr && <div className="limited-hint err">{t("limited.err")}: {fixErr}</div>}
+      <div className="limited-hint">{t("limited.manual")}</div>
+      <div className="limited-cmd" onClick={() => { navigator.clipboard.writeText(cmd); setCopied(true); setTimeout(() => setCopied(false), 1500); }} title={t("limited.copyHint")}>
         {cmd.split("\n").map((l, i) => (
           <div key={i}>{l}</div>
         ))}
       </div>
-      <div className="limited-hint">{copied ? "✓ Скопировано" : "Нажмите на блок, чтобы скопировать"}</div>
+      <div className="limited-hint">{copied ? t("limited.copied") : t("limited.copyHint")}</div>
     </div>
   );
 }
@@ -346,16 +328,16 @@ function DeviceCard({
     <div className={`device ${dev.wifi ? "is-wifi" : "is-lan"} ${dev.online ? "is-online" : "is-offline"}`}>
       <div
         className="device-icon"
-        title="Сменить тип устройства"
+        title={t("device.changeKind")}
         onMouseDown={(e) => { e.stopPropagation(); setKindMenu((v) => !v); }}
         onClick={(e) => e.stopPropagation()}
       >
         {icon}
         {kindMenu && (
           <div className="kind-menu" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
-            {KIND_OPTIONS.map(([k, label]) => (
+            {KIND_KEYS.map((k) => (
               <button key={k} className={`kind-opt ${k === dev.kind ? "active" : ""}`} onClick={() => { setKindMenu(false); onSetKind(dev.mac, k); }}>
-                {label}
+                {t(`kinds.${k}`)}
               </button>
             ))}
           </div>
@@ -372,25 +354,25 @@ function DeviceCard({
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onBlur={() => onSaveRename(dev.mac, draft)}
-              placeholder="Имя устройства"
+              placeholder={t("device.namePh")}
             />
           </form>
         ) : (
           <div className="device-name" title={dev.name}>
             {display}
-            {dev.blocked && <span className="badge badge-blocked">🚫 блок</span>}
+            {dev.blocked && <span className="badge badge-blocked">{t("device.blockBadge")}</span>}
             {dev.alias && <span className="badge">{dev.name}</span>}
           </div>
         )}
         <div className="device-meta">
-          <span>{dev.ip || "нет IP"}</span>
+          <span>{dev.ip || t("device.noIp")}</span>
           <span className="dot">·</span>
-          <span>{dev.wifi ? bandLabel(dev.band) : "LAN"}</span>
+          <span>{dev.wifi ? bandLabel(dev.band) : t("device.lan")}</span>
           {dev.wifi && <SignalBars dbm={dev.signal} />}
           {(speedDown != null || speedUp != null) && (
             <span
               className="dev-speed"
-              title={`Скачивание: ${fmtBits(speedDown)} · Отдача: ${fmtBits(speedUp)}`}
+              title={t("device.speedTitle", { down: fmtBits(speedDown), up: fmtBits(speedUp) })}
             >
               <span className="dev-speed-down">↓ {fmtRate(speedDown)}</span>
               <span className="dev-speed-up">↑ {fmtRate(speedUp)}</span>
@@ -399,20 +381,20 @@ function DeviceCard({
         </div>
       </div>
       <div className="device-actions">
-        <button className={`icon-btn ${dev.pinned ? "pin-on" : ""}`} title={dev.pinned ? "Снять закрепление" : "Закрепить наверху"} onClick={() => onPin(dev.mac)}>
+        <button className={`icon-btn ${dev.pinned ? "pin-on" : ""}`} title={dev.pinned ? t("device.unpin") : t("device.pin")} onClick={() => onPin(dev.mac)}>
           📌
         </button>
-        <button className="icon-btn" title="Переименовать" onClick={() => onStartRename(dev.mac)}>
+        <button className="icon-btn" title={t("device.rename")} onClick={() => onStartRename(dev.mac)}>
           ✎
         </button>
         {dev.wifi && (
-          <button className="icon-btn" title="Отключить от Wi-Fi" onClick={() => onKick(dev.mac)}>
+          <button className="icon-btn" title={t("device.kick")} onClick={() => onKick(dev.mac)}>
             ⏏
           </button>
         )}
         <button
           className="icon-btn"
-          title={dev.blocked ? "Разблокировать" : "Заблокировать"}
+          title={dev.blocked ? t("device.unblock") : t("device.block")}
           onClick={() => onBlock(dev.mac, !dev.blocked, dev.wifi)}
         >
           {dev.blocked ? "✓" : "🚫"}
@@ -515,12 +497,12 @@ function ScanModal({
       await invoke("set_channel", { device: radio, channel: ch });
       showToast(
         isDfs(ch)
-          ? `Канал ${ch} (DFS): ~1 мин проверка радара, затем устройства переподключатся`
-          : `Радио переключено на канал ${ch} — переподключение устройств займёт ~10 сек`,
+          ? t("scan.dfsApply", { ch })
+          : t("scan.applied", { ch }),
       );
       onClose();
     } catch (e) {
-      showToast(`Ошибка смены канала: ${e}`);
+      showToast(t("scan.chErr", { e: String(e) }));
     } finally {
       setApplying(null);
     }
@@ -535,7 +517,7 @@ function ScanModal({
         arr.sort((a: ScanResult, b: ScanResult) => (b.signal ?? -999) - (a.signal ?? -999));
         setNets(arr);
       })
-      .catch((e) => { setErr(String(e)); showToast(`Ошибка скана: ${e}`); });
+      .catch((e) => { setErr(String(e)); showToast(t("scan.scanErr", { e: String(e) })); });
   }, [device, showToast]);
   const coChannel = nets?.filter((n) => ourChannel != null && n.channel === ourChannel).length ?? 0;
   const adjacent =
@@ -548,19 +530,19 @@ function ScanModal({
     ? best.filter((b) => b.ch !== ourChannel && b.score < channelScore(ourChannel, nets, ourWidth) - 1)
     : [];
   const verdict = ourChannel == null ? null : coChannel > 0
-    ? `Ваш канал ${ourChannel} (${ourWidth} МГц) занят соседями (${coChannel} сет${coChannel === 1 ? "ь" : "и"}) — лучше сменить`
+    ? t("scan.verdictBusy", { ch: ourChannel, w: ourWidth, n: coChannel })
     : adjacent > 0
-      ? `Канал ${ourChannel} (${ourWidth} МГц) свободен, но ${adjacent} соседн${adjacent === 1 ? "яя" : "их"} сет${adjacent === 1 ? "ь" : "и"} перекрываются`
-      : `Канал ${ourChannel} (${ourWidth} МГц) чист`;
+      ? t("scan.verdictAdj", { ch: ourChannel, w: ourWidth, n: adjacent })
+      : t("scan.verdictClean", { ch: ourChannel, w: ourWidth });
   return (
-    <Modal title={`Сети вокруг (${device})`} onClose={onClose}>
+    <Modal title={t("scan.title", { dev: device })} onClose={onClose}>
       {verdict && (
         <div className={`scan-verdict ${coChannel > 0 ? "err" : adjacent > 0 ? "warn" : "ok"}`}>
           {verdict}
           {coChannel + adjacent > 0 && (
             better.length > 0
-              ? <> · свободнее: <b>{better.slice(0, 2).map((b) => b.ch).join(" / ")}</b></>
-              : <> · на этом эфире лучше некуда</>
+              ? <>{t("scan.freeChannels")}<b>{better.slice(0, 2).map((b) => b.ch).join(" / ")}</b></>
+              : <>{t("scan.noBetter")}</>
           )}
         </div>
       )}
@@ -568,7 +550,7 @@ function ScanModal({
         <div className="channel-actions">
           {better.length > 0 && (
             <button className="btn btn-primary" disabled={applying != null} onClick={() => applyChannel(better[0].ch)}>
-              {applying === better[0].ch ? <span className="spinner" /> : `Переключить на ${better[0].ch}`}
+              {applying === better[0].ch ? <span className="spinner" /> : t("scan.switchTo", { ch: better[0].ch })}
             </button>
           )}
           <select
@@ -582,35 +564,35 @@ function ScanModal({
           >
             {(band === "2G" ? [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] : CH_5G).map((ch) => (
               <option key={ch} value={ch}>
-                {ch}{isDfs(ch) ? " (DFS)" : ""}{ourChannel === ch ? " — текущий" : ""}
+                {ch}{isDfs(ch) ? " (DFS)" : ""}{ourChannel === ch ? t("scan.current") : ""}
               </option>
             ))}
           </select>
           {band !== "2G" && (
-            <span className="hint" title="Переключение на DFS-канал требует ~1 минуты тишины (CAC) и не поддерживается частью клиентов">
-              DFS = проверка радара ~1 мин
+            <span className="hint" title={t("scan.dfsHint")}>
+              {t("scan.dfsShort")}
             </span>
           )}
         </div>
       )}
-      {err && <div className="status err">{err} — нужен ACL на iwinfo scan (кнопка «Исправить») или выполните его через LuCI</div>}
-      {!err && !nets && <div className="loading"><span className="spinner" /> Скан занимает ~10 секунд…</div>}
+      {err && <div className="status err">{t("scan.aclErr", { e: err })}</div>}
+      {!err && !nets && <div className="loading"><span className="spinner" /> {t("scan.busy")}</div>}
       {nets && (
         <table className="scan-table">
-          <thead><tr><th>SSID</th><th>Кан.</th><th>Сигнал</th><th>Защита</th></tr></thead>
+          <thead><tr><th>{t("scan.ssid")}</th><th>{t("scan.channel")}</th><th>{t("scan.signal")}</th><th>{t("scan.enc")}</th></tr></thead>
           <tbody>
             {nets.map((n, i) => {
               const ov = ourChannel != null && n.channel != null ? overlapKind(ourChannel, n.channel, ourWidth, n.ht_operation?.channel_width ?? 20) : null;
               return (
                 <tr key={i} className={ov === "co" ? "row-co" : ov === "adj" ? "row-adj" : ""}>
-                  <td>{ov === "co" ? "🔴 " : ov === "adj" ? "🟡 " : ""}{n.ssid || "(скрытая)"}</td>
-                  <td>{n.channel != null ? `${n.channel}${n.channel === ourChannel ? " (наш)" : ""}${(n.ht_operation?.channel_width ?? 20) !== 20 ? ` · ${n.ht_operation?.channel_width}М` : ""}` : "—"}</td>
+                  <td>{ov === "co" ? "🔴 " : ov === "adj" ? "🟡 " : ""}{n.ssid || t("scan.hidden")}</td>
+                  <td>{n.channel != null ? `${n.channel}${n.channel === ourChannel ? t("scan.ours") : ""}${(n.ht_operation?.channel_width ?? 20) !== 20 ? ` · ${n.ht_operation?.channel_width}М` : ""}` : "—"}</td>
                   <td>{n.signal != null ? `${n.signal} dBm` : "—"}</td>
-                  <td>{n.encryption?.enabled ? "🔒" : "открытая"}</td>
+                  <td>{n.encryption?.enabled ? "🔒" : t("scan.open")}</td>
                 </tr>
               );
             })}
-            {!nets.length && <tr><td colSpan={4}>Сетей не найдено</td></tr>}
+            {!nets.length && <tr><td colSpan={4}>{t("scan.none")}</td></tr>}
           </tbody>
         </table>
       )}
@@ -619,10 +601,10 @@ function ScanModal({
 }
 
 const DIAG_PRESETS: [string, string, string][] = [
-  ["ping_gw", "Ping шлюза провайдера", "проверка выхода в интернет через upstream"],
-  ["ping_dns", "Ping 8.8.8.8", "проверка DNS-независимой связности"],
-  ["log", "Журнал (logread, 60 строк)", "последние события роутера"],
-  ["mem", "Память и диск", "free + df"],
+  ["ping_gw", "diag.pingGw", "diag.pingGwHint"],
+  ["ping_dns", "diag.pingDns", "diag.pingDnsHint"],
+  ["log", "diag.log", "diag.logHint"],
+  ["mem", "diag.mem", "diag.memHint"],
 ];
 
 function DiagModal({ onClose, showToast }: { onClose: () => void; showToast: (m: string) => void }) {
@@ -634,18 +616,19 @@ function DiagModal({ onClose, showToast }: { onClose: () => void; showToast: (m:
     try {
       setOut(await invoke<string>("run_diag", { kind }));
     } catch (e) {
-      setOut(`Ошибка: ${e}`);
-      showToast(`Ошибка: ${e}`);
+      const msg = t("act.err", { e: String(e) });
+      setOut(msg);
+      showToast(msg);
     } finally {
       setBusy(null);
     }
   };
   return (
-    <Modal title="Диагностика роутера" onClose={onClose}>
+    <Modal title={t("diag.title")} onClose={onClose}>
       <div className="diag-row">
         {DIAG_PRESETS.map(([k, label, hint]) => (
-          <button key={k} className="btn btn-ghost" disabled={busy != null} title={hint} onClick={() => run(k)}>
-            {busy === k ? <span className="spinner" /> : label}
+          <button key={k} className="btn btn-ghost" disabled={busy != null} title={t(hint)} onClick={() => run(k)}>
+            {busy === k ? <span className="spinner" /> : t(label)}
           </button>
         ))}
       </div>
@@ -655,10 +638,14 @@ function DiagModal({ onClose, showToast }: { onClose: () => void; showToast: (m:
 }
 
 function SettingsView({
-  onSaved, onClose,
+  onSaved, onClose, lang, theme, onLang, onTheme,
 }: {
   onSaved: () => void;
   onClose: () => void;
+  lang: Lang;
+  theme: string;
+  onLang: (l: Lang) => void;
+  onTheme: (th: string) => void;
 }) {
   const [s, setS] = useState<Settings | null>(null);
   const [password, setPassword] = useState("");
@@ -667,6 +654,7 @@ function SettingsView({
   const [autoStart, setAutoStart] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [notify, setNotify] = useState(true);
+  const [version, setVersion] = useState("");
   const reloadSettings = useCallback(() => {
     invoke<Settings>("get_settings").then((v) => {
       setS(v);
@@ -675,18 +663,12 @@ function SettingsView({
       setNotify(v.notify !== false);
     });
   }, []);
-  const reloadRef = useRef(reloadSettings);
-  reloadRef.current = reloadSettings;
 
   useEffect(() => {
-    invoke<Settings>("get_settings").then((v) => {
-      setS(v);
-      const p = v.profiles?.[v.activeProfile];
-      setProfileName(p?.name ?? "");
-      setNotify(v.notify !== false);
-    });
+    reloadSettings();
     autostartIsEnabled().then(setAutoStart).catch(() => {});
-  }, []);
+    getVersion().then(setVersion).catch(() => {});
+  }, [reloadSettings]);
 
   const switchProfile = async (idx: number) => {
     try {
@@ -694,7 +676,7 @@ function SettingsView({
       reloadSettings();
       onSaved();
     } catch (e) {
-      setStatus({ ok: false, msg: `Профиль: ${e}` });
+      setStatus({ ok: false, msg: t("set.errPrefix", { ctx: t("set.routers"), e: String(e) }) });
     }
   };
   const addProfile = async () => {
@@ -702,7 +684,7 @@ function SettingsView({
       await invoke("add_profile", { name: "" });
       reloadSettings();
     } catch (e) {
-      setStatus({ ok: false, msg: `Профиль: ${e}` });
+      setStatus({ ok: false, msg: t("set.errPrefix", { ctx: t("set.routers"), e: String(e) }) });
     }
   };
   const deleteProfile = async () => {
@@ -710,7 +692,7 @@ function SettingsView({
       await invoke("delete_profile", { index: s!.activeProfile });
       reloadSettings();
     } catch (e) {
-      setStatus({ ok: false, msg: `Профиль: ${e}` });
+      setStatus({ ok: false, msg: t("set.errPrefix", { ctx: t("set.routers"), e: String(e) }) });
     }
   };
 
@@ -724,7 +706,7 @@ function SettingsView({
         setAutoStart(true);
       }
     } catch (e) {
-      setStatus({ ok: false, msg: `Автозапуск: ${e}` });
+      setStatus({ ok: false, msg: t("set.errPrefix", { ctx: t("set.autostart"), e: String(e) }) });
     }
   };
 
@@ -744,7 +726,7 @@ function SettingsView({
         notify,
       });
       const model = await invoke<string>("test_connection");
-      setStatus({ ok: true, msg: `Подключено: ${model}` });
+      setStatus({ ok: true, msg: t("set.connected", { model }) });
       if (!testOnly) {
         onSaved();
         onClose();
@@ -758,30 +740,30 @@ function SettingsView({
 
   return (
     <div className="settings">
-      <h3>Роутеры</h3>
+      <h3>{t("set.routers")}</h3>
       <div className="profile-row">
         <select
           value={s.activeProfile}
           onChange={(e) => switchProfile(Number(e.target.value))}
         >
           {s.profiles?.map((p, i) => (
-            <option key={i} value={i}>{p.name || p.host || `Роутер ${i + 1}`}</option>
+            <option key={i} value={i}>{p.name || p.host || t("set.routerN", { n: i + 1 })}</option>
           ))}
         </select>
-        <button className="icon-btn" title="Добавить роутер" onClick={addProfile}>＋</button>
-        <button className="icon-btn" title="Удалить этот роутер" disabled={(s.profiles?.length ?? 0) <= 1} onClick={deleteProfile}>🗑</button>
+        <button className="icon-btn" title={t("set.addRouter")} onClick={addProfile}>＋</button>
+        <button className="icon-btn" title={t("set.delRouter")} disabled={(s.profiles?.length ?? 0) <= 1} onClick={deleteProfile}>🗑</button>
       </div>
       <label>
-        Название профиля
+        {t("set.profileName")}
         <input
           value={profileName}
           onChange={(e) => setProfileName(e.target.value)}
-          placeholder="Дом"
+          placeholder={t("set.profilePh")}
         />
       </label>
-      <h3>Подключение</h3>
+      <h3>{t("set.connection")}</h3>
       <label>
-        Адрес роутера
+        {t("set.host")}
         <input
           value={s.host}
           onChange={(e) => setS({ ...s, host: e.target.value })}
@@ -789,13 +771,13 @@ function SettingsView({
         />
       </label>
       <label>
-        Логин
+        {t("set.login")}
         <input value={s.username} onChange={(e) => setS({ ...s, username: e.target.value })} />
       </label>
       <label>
-        Пароль{" "}
-        {password === "" && s.hasPassword && <span className="hint ok-hint">✓ сохранён (шифруется DPAPI) — пусто = не менять</span>}
-        {password === "" && !s.hasPassword && <span className="hint">не задан</span>}
+        {t("set.password")}{" "}
+        {password === "" && s.hasPassword && <span className="hint ok-hint">{t("set.pwSaved")}</span>}
+        {password === "" && !s.hasPassword && <span className="hint">{t("set.pwNone")}</span>}
         <input
           type="password"
           value={password}
@@ -804,27 +786,27 @@ function SettingsView({
         />
       </label>
       <label>
-        SSH-ключ роутера
+        {t("set.sshKey")}
         <div className="range-row">
           <button
             type="button"
             className="btn btn-ghost"
-            title="Забыть сохранённый отпечаток ключа (после перепрошивки роутера)"
+            title={t("set.forgetKeyTitle")}
             onClick={async () => {
               try {
                 await invoke("ssh_forget_host_key");
-                setStatus({ ok: true, msg: "Ключ SSH забыт — при следующем подключении будет запомнен заново" });
+                setStatus({ ok: true, msg: t("set.keyForgotten") });
               } catch (e) {
-                setStatus({ ok: false, msg: `Ключ SSH: ${e}` });
+                setStatus({ ok: false, msg: t("set.errPrefix", { ctx: "SSH", e: String(e) }) });
               }
             }}
           >
-            Забыть ключ SSH
+            {t("set.forgetKey")}
           </button>
         </div>
       </label>
       <label>
-        Опрос каждые
+        {t("set.poll")}
         <div className="range-row">
           <input
             type="range"
@@ -833,11 +815,11 @@ function SettingsView({
             value={s.pollIntervalSecs}
             onChange={(e) => setS({ ...s, pollIntervalSecs: Number(e.target.value) })}
           />
-          <span>{s.pollIntervalSecs} c</span>
+          <span>{s.pollIntervalSecs} {t("set.sec")}</span>
         </div>
       </label>
       <label>
-        Плитки статистики — строк
+        {t("set.tiles")}
         <div className="range-row">
           <div className="seg-row">
             {[1, 2, 3].map((n) => (
@@ -854,18 +836,42 @@ function SettingsView({
         </div>
       </label>
       <label>
-        Уведомления
+        {t("set.language")}
         <div className="range-row">
-          <button type="button" className={`btn ${notify ? "btn-primary" : "btn-ghost"}`} onClick={() => setNotify((v) => !v)}>
-            {notify ? "Включены — подключение/отключение устройств" : "Выключены"}
+          <select
+            className="channel-select"
+            value={lang}
+            onChange={(e) => onLang(e.target.value as Lang)}
+          >
+            <option value="ru">Русский</option>
+            <option value="en">English</option>
+          </select>
+        </div>
+      </label>
+      <label>
+        {t("set.theme")}
+        <div className="range-row">
+          <button type="button" className={`btn ${theme === "dark" ? "btn-primary" : "btn-ghost"}`} onClick={() => onTheme("dark")}>
+            {t("set.themeDark")}
+          </button>
+          <button type="button" className={`btn ${theme === "light" ? "btn-primary" : "btn-ghost"}`} onClick={() => onTheme("light")}>
+            {t("set.themeLight")}
           </button>
         </div>
       </label>
       <label>
-        Автозапуск
+        {t("set.notify")}
+        <div className="range-row">
+          <button type="button" className={`btn ${notify ? "btn-primary" : "btn-ghost"}`} onClick={() => setNotify((v) => !v)}>
+            {notify ? t("set.notifyOn") : t("set.notifyOff")}
+          </button>
+        </div>
+      </label>
+      <label>
+        {t("set.autostart")}
         <div className="range-row">
           <button type="button" className={`btn ${autoStart ? "btn-primary" : "btn-ghost"}`} onClick={toggleAutoStart}>
-            {autoStart ? "Включён — запускать при входе в систему" : "Выключен"}
+            {autoStart ? t("set.autostartOn") : t("set.autostartOff")}
           </button>
         </div>
       </label>
@@ -874,16 +880,30 @@ function SettingsView({
       )}
       <div className="settings-actions">
         <button className="btn btn-ghost" disabled={testing} onClick={() => save(true)}>
-          {testing ? <span className="spinner" /> : "Проверить"}
+          {testing ? <span className="spinner" /> : t("set.test")}
         </button>
         <button className="btn btn-primary" disabled={testing} onClick={() => save(false)}>
-          Сохранить
+          {t("set.save")}
         </button>
       </div>
       <p className="settings-note">
-        На роутере должен быть установлен LuCI (endpoint <code>/ubus</code>).
-        Пароль хранится локально в конфиге приложения.
+        {t("set.note1")}<code>/ubus</code>{t("set.note2")}
       </p>
+      <div className="about-box">
+        <div className="about-row"><span>{t("set.version")}</span><b>OpenWrt Companion{version ? ` v${version}` : ""}</b></div>
+        <div className="about-row"><span>{t("set.license")}</span><b>{t("set.licenseVal")}</b></div>
+        <div className="about-row">
+          <span>{t("set.project")}</span>
+          <a
+            href={REPO_URL}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => { e.preventDefault(); invoke("open_external", { url: REPO_URL }); }}
+          >
+            github.com/bigwolfys79/openwrt-companion
+          </a>
+        </div>
+      </div>
     </div>
   );
 }
@@ -906,6 +926,7 @@ export default function App() {
   const [filter, setFilter] = useState<"online" | "wifi" | "lan" | "archive" | "blocked">("online");
   const [pollSecs, setPollSecs] = useState(5);
   const [statsRows, setStatsRows] = useState(2);
+  const [, setUiTick] = useState(0); // forces re-render when language changes
 
   useEffect(() => {
     invoke<Settings>("get_settings")
@@ -913,6 +934,9 @@ export default function App() {
         setPollSecs(s.pollIntervalSecs);
         setStatsRows(s.statsRows ?? 2);
         notifyRef.current = s.notify !== false;
+        setLang(normalizeLang(s.language));
+        document.documentElement.dataset.theme = s.theme === "light" ? "light" : "dark";
+        setUiTick((n) => n + 1);
       })
       .catch(() => {});
   }, []);
@@ -921,6 +945,17 @@ export default function App() {
     setToast(msg);
     setTimeout(() => setToast(null), 2600);
   }, []);
+
+  /* --- language & theme, saved immediately (no "Save" needed) --- */
+  const changeLang = (l: Lang) => {
+    setLang(l);
+    setUiTick((n) => n + 1);
+    invoke("set_ui_prefs", { language: l, theme: document.documentElement.dataset.theme ?? "dark" }).catch(() => {});
+  };
+  const changeTheme = (th: string) => {
+    document.documentElement.dataset.theme = th === "light" ? "light" : "dark";
+    invoke("set_ui_prefs", { language: getLang(), theme: th === "light" ? "light" : "dark" }).catch(() => {});
+  };
 
   /* --- desktop notifications on device transitions --- */
   const notifyRef = useRef(true);
@@ -938,7 +973,7 @@ export default function App() {
     if (snap.status !== "ok") {
       if (!offlineNotified.current) {
         offlineNotified.current = true;
-        notifySend("📡 Роутер недоступен", snap.error ?? "нет соединения");
+        notifySend(t("ntf.routerDown"), snap.error ?? t("main.noConn"));
       }
       return;
     }
@@ -949,9 +984,9 @@ export default function App() {
       for (const [mac, c] of cur) {
         const was = known.get(mac);
         if (!was || (!was.online && c.online)) {
-          if (c.online) notifySend("🟢 Устройство подключилось", c.name);
+          if (c.online) notifySend(t("ntf.devOnline"), c.name);
         } else if (was.online && !c.online) {
-          notifySend("🔴 Устройство отключилось", c.name);
+          notifySend(t("ntf.devOffline"), c.name);
         }
       }
     }
@@ -976,9 +1011,9 @@ export default function App() {
     setBusyRadio(device);
     try {
       await invoke("reboot_radio", { device });
-      showToast("Wi-Fi перезагружается…");
+      showToast(t("act.radioRebooting"));
     } catch (e) {
-      showToast(`Ошибка: ${e}`);
+      showToast(t("act.err", { e: String(e) }));
     } finally {
       setBusyRadio(null);
     }
@@ -989,17 +1024,17 @@ export default function App() {
       await invoke("toggle_pin", { mac });
       setSnap(await invoke<Snapshot>("get_snapshot"));
     } catch (e) {
-      showToast(`Ошибка: ${e}`);
+      showToast(t("act.err", { e: String(e) }));
     }
   };
 
   const doBackup = async () => {
-    showToast("Создаётся бэкап конфига…");
+    showToast(t("act.backingUp"));
     try {
       const p = await invoke<string>("backup_config");
-      showToast(`✓ Бэкап сохранён: ${p}`);
+      showToast(t("act.backupDone", { p }));
     } catch (e) {
-      showToast(`Ошибка бэкапа: ${e}`);
+      showToast(t("act.backupErr", { e: String(e) }));
     }
   };
 
@@ -1009,7 +1044,7 @@ export default function App() {
       const s = await invoke<Snapshot>("get_snapshot");
       setSnap(s);
     } catch (e) {
-      showToast(`Ошибка: ${e}`);
+      showToast(t("act.err", { e: String(e) }));
     }
   };
 
@@ -1020,16 +1055,16 @@ export default function App() {
       const s = await invoke<Snapshot>("get_snapshot");
       setSnap(s);
     } catch (e) {
-      showToast(`Ошибка: ${e}`);
+      showToast(t("act.err", { e: String(e) }));
     }
   };
 
   const doKick = async (mac: string) => {
     try {
       await invoke("kick_client", { mac });
-      showToast("Устройство отключено от Wi-Fi");
+      showToast(t("act.kicked"));
     } catch (e) {
-      showToast(`Ошибка: ${e}`);
+      showToast(t("act.err", { e: String(e) }));
     }
   };
 
@@ -1042,11 +1077,11 @@ export default function App() {
           await invoke("kick_client", { mac });
         } catch { /* may already be gone / LAN device */ }
       }
-      showToast(block ? "Устройство заблокировано и отключено от Wi-Fi" : "Устройство разблокировано");
+      showToast(block ? t("act.blocked") : t("act.unblocked"));
       const s = await invoke<Snapshot>("get_snapshot");
       setSnap(s);
     } catch (e) {
-      showToast(`Ошибка: ${e}`);
+      showToast(t("act.err", { e: String(e) }));
     }
   };
 
@@ -1074,6 +1109,10 @@ export default function App() {
 
       {settingsOpen ? (
         <SettingsView
+          lang={getLang()}
+          theme={document.documentElement.dataset.theme ?? "dark"}
+          onLang={changeLang}
+          onTheme={changeTheme}
           onSaved={async () => {
             try {
               const s = await invoke<Settings>("get_settings");
@@ -1088,10 +1127,10 @@ export default function App() {
           {offline && (
             <div className="offline">
               <div className="offline-icon">📡</div>
-              <b>Роутер недоступен</b>
-              <span>{snap?.error ?? "нет соединения"}</span>
+              <b>{t("main.offline")}</b>
+              <span>{snap?.error ?? t("main.noConn")}</span>
               <button className="btn btn-ghost" onClick={() => invoke("get_snapshot")}>
-                Повторить
+                {t("main.retry")}
               </button>
             </div>
           )}
@@ -1101,7 +1140,7 @@ export default function App() {
               {snap.limited && (
                 <LimitedBanner
                   onFixed={async () => {
-                    showToast("Права применены, обновляем…");
+                    showToast(t("limited.applied"));
                     await new Promise((r) => setTimeout(r, 2000));
                     const s = await invoke<Snapshot>("get_snapshot");
                     setSnap(s);
@@ -1114,37 +1153,38 @@ export default function App() {
               <RadioControls radios={snap.radios} busy={busyRadio} onReboot={doRebootRadio} onScan={(dev, radio, ch, w, band) => { setScanDevice(dev); setScanRadio(radio); setScanChannel(ch); setScanWidth(w); setScanBand(band); }} />
 
               <div className="toolbar">
+                <div className="toolbar-btns">
+                  <button className="icon-btn" title={t("act.diag")} onClick={() => setDiagOpen(true)}>🩺</button>
+                  <button className="icon-btn" title={t("act.backup")} onClick={doBackup}>💾</button>
+                  <button
+                    className="icon-btn"
+                    title={t("act.reboot")}
+                    onClick={async () => {
+                      try {
+                        await invoke("reboot_router");
+                        showToast(t("act.rebooting"));
+                      } catch (e) {
+                        showToast(t("act.err", { e: String(e) }));
+                      }
+                    }}
+                  >
+                    ⏻
+                  </button>
+                </div>
                 <div className="tabs">
-                  {([["online", `Активные ${onlineCount}`], ["wifi", `Wi-Fi ${wifiCount}`], ["lan", `LAN ${lanCount}`], ["blocked", `🚫 ${blockedCount}`], ["archive", `Архив ${archiveCount}`]] as const).map(
-                    ([key, label]) => (
+                  {(["online", "wifi", "lan", "blocked", "archive"] as const).map((key) => {
+                    const n = key === "online" ? onlineCount : key === "wifi" ? wifiCount : key === "lan" ? lanCount : key === "blocked" ? blockedCount : archiveCount;
+                    return (
                       <button
                         key={key}
                         className={`tab ${filter === key ? "active" : ""}`}
                         onClick={() => setFilter(key)}
                       >
-                        {label}
+                        {t(`tabs.${key}`, { n })}
                       </button>
-                    ),
-                  )}
+                    );
+                  })}
                 </div>
-                <div className="toolbar-btns">
-                  <button className="icon-btn" title="Диагностика" onClick={() => setDiagOpen(true)}>🩺</button>
-                  <button className="icon-btn" title="Бэкап конфига в Загрузки" onClick={doBackup}>💾</button>
-                </div>
-                <button
-                  className="icon-btn"
-                  title="Перезагрузить роутер"
-                  onClick={async () => {
-                    try {
-                      await invoke("reboot_router");
-                      showToast("Роутер перезагружается…");
-                    } catch (e) {
-                      showToast(`Ошибка: ${e}`);
-                    }
-                  }}
-                >
-                  ⏻
-                </button>
               </div>
 
               <div className="device-list">
@@ -1175,7 +1215,7 @@ export default function App() {
                     />
                   );
                 })}
-                {!devices.length && <div className="empty">Нет устройств</div>}
+                {!devices.length && <div className="empty">{t("main.noDevices")}</div>}
               </div>
             </>
           )}

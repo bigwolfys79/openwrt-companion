@@ -1,6 +1,6 @@
 # OpenWrt Companion
 
-![Version](https://img.shields.io/badge/version-1.2.0-blue) ![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey) ![License](https://img.shields.io/badge/license-CC%20BY--NC%204.0-orange)
+![Version](https://img.shields.io/badge/version-1.2.1-blue) ![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey) ![License](https://img.shields.io/badge/license-CC%20BY--NC%204.0-orange)
 
 Компактный настольный компаньон для роутера **OpenWrt**: живая панель «кто в сети и как живёт роутер» + анимированная иконка в трее. Без облака, без веб-интерфейса — всё напрямую с вашего роутера.
 

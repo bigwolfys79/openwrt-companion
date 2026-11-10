@@ -92,6 +92,50 @@ pub fn ssh_forget_host_key(state: State<'_, AppState>) -> Result<(), String> {
     crate::ssh::forget_host_key(&host)
 }
 
+/// Persist UI-only preferences (language, theme) immediately — applied without
+/// pressing "Save" in the settings view.
+#[tauri::command]
+pub fn set_ui_prefs(state: State<'_, AppState>, language: String, theme: String) -> Result<(), String> {
+    let mut s = state.settings.inner.read().unwrap().clone();
+    s.language = match language.as_str() {
+        "en" => "en".into(),
+        _ => "ru".into(),
+    };
+    s.theme = match theme.as_str() {
+        "light" => "light".into(),
+        _ => "dark".into(),
+    };
+    state.settings.save(&s).map_err(|e| e.to_string())?;
+    *state.settings.inner.write().unwrap() = s;
+    Ok(())
+}
+
+/// Open a URL in the system browser (About section: project page).
+#[tauri::command]
+pub fn open_external(url: String) -> Result<(), String> {
+    // only https links, so the command can't be abused to launch arbitrary apps
+    if !url.starts_with("https://") {
+        return Err("only https URLs are allowed".into());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "", &url])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> Settings {
     let mut s = state.settings.inner.read().unwrap().clone();

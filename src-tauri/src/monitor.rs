@@ -40,8 +40,10 @@ pub fn start(app: AppHandle) {
                     let _ = app.emit("snapshot", &offline);
                     tray_anim::set_offline(&app, true);
                     if let Some(tray) = app.tray_by_id("main") {
+                        let lang = crate::i18n::lang(&app);
                         let _ = tray.set_tooltip(Some(format!(
-                            "OpenWrt Companion\nРоутер недоступен\n{}",
+                            "OpenWrt Companion\n{}\n{}",
+                            crate::i18n::tr(&lang, "Роутер недоступен", "Router unreachable"),
                             truncate(&e, 80)
                         )));
                     }
@@ -91,13 +93,13 @@ fn wan_speed(prev: Option<&Snapshot>, cur: &Snapshot) -> (f64, f64) {
     best
 }
 
-fn fmt_bits(bps: f64) -> String {
+fn fmt_bits(bps: f64, lang: &str) -> String {
     if bps < 1_000_000.0 {
-        format!("{:.0} кбит/с", bps / 1000.0)
+        format!("{:.0} {}", bps / 1000.0, crate::i18n::tr(lang, "кбит/с", "kbit/s"))
     } else if bps < 1_000_000_000.0 {
-        format!("{:.1} Мбит/с", bps / 1_000_000.0)
+        format!("{:.1} {}", bps / 1_000_000.0, crate::i18n::tr(lang, "Мбит/с", "Mbit/s"))
     } else {
-        format!("{:.2} Гбит/с", bps / 1_000_000_000.0)
+        format!("{:.2} {}", bps / 1_000_000_000.0, crate::i18n::tr(lang, "Гбит/с", "Gbit/s"))
     }
 }
 
@@ -120,6 +122,7 @@ fn truncate(s: &str, n: usize) -> String {
 }
 
 fn update_tray(app: &AppHandle, s: &Snapshot, prev: Option<&Snapshot>) -> tauri::Result<()> {
+    let lang = crate::i18n::lang(app);
     tray_anim::set_offline(app, false);
 
     // traffic level 0..3 -> bar animation
@@ -175,19 +178,26 @@ fn update_tray(app: &AppHandle, s: &Snapshot, prev: Option<&Snapshot>) -> tauri:
     speeds.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
     let mut menu = MenuBuilder::new(app);
     if speeds.is_empty() {
-        let it = MenuItemBuilder::with_id("noop", "Нет активных устройств").enabled(false).build(app)?;
+        let it = MenuItemBuilder::with_id("noop", crate::i18n::tr(lang, "Нет активных устройств", "No active devices")).enabled(false).build(app)?;
         menu = menu.item(&it);
     }
     for (mac, name, down, up) in speeds.iter().take(10) {
-        let label = format!("{name} — ↓ {} ↑ {}", fmt_bits(*down), fmt_bits(*up));
+        let label = format!("{name} — ↓ {} ↑ {}", fmt_bits(*down, lang), fmt_bits(*up, lang));
         let it = MenuItemBuilder::with_id(format!("dev:{mac}"), label).build(app)?;
         menu = menu.item(&it);
     }
     let sep0 = tauri::menu::PredefinedMenuItem::separator(app)?;
-    let show = MenuItemBuilder::with_id("show", "Show panel").build(app)?;
-    let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+    let show = MenuItemBuilder::with_id("show", crate::i18n::tr(lang, "Показать панель", "Show panel")).build(app)?;
+    let wifi24 = MenuItemBuilder::with_id("wifi24", crate::i18n::tr(lang, "Перезагрузить Wi-Fi 2.4 ГГц", "Reboot Wi-Fi 2.4 GHz")).build(app)?;
+    let wifi5 = MenuItemBuilder::with_id("wifi5", crate::i18n::tr(lang, "Перезагрузить Wi-Fi 5 ГГц", "Reboot Wi-Fi 5 GHz")).build(app)?;
+    let reboot = MenuItemBuilder::with_id("reboot", crate::i18n::tr(lang, "Перезагрузить роутер", "Reboot router")).build(app)?;
+    let quit = MenuItemBuilder::with_id("quit", crate::i18n::tr(lang, "Выход", "Quit")).build(app)?;
     let sep1 = tauri::menu::PredefinedMenuItem::separator(app)?;
-    menu = menu.item(&sep0).item(&show).item(&sep1).item(&quit);
+    let sep2 = tauri::menu::PredefinedMenuItem::separator(app)?;
+    let sep3 = tauri::menu::PredefinedMenuItem::separator(app)?;
+    menu = menu.item(&sep0).item(&show).item(&sep1)
+        .item(&wifi24).item(&wifi5).item(&sep2)
+        .item(&reboot).item(&sep3).item(&quit);
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_menu(Some(menu.build()?));
     }
@@ -196,7 +206,7 @@ fn update_tray(app: &AppHandle, s: &Snapshot, prev: Option<&Snapshot>) -> tauri:
     // yellow when offline). Empty tooltip would flash "OpenWrt Companion",
     // so offline keeps a short hint line.
     let tip = if online.is_empty() {
-        "Роутер офлайн".to_string()
+        crate::i18n::tr(lang, "Роутер офлайн", "Router offline").to_string()
     } else {
         speeds
             .iter()
