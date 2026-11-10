@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenWrt Companion",
+  "version": "1.2.0",
+  "identifier": "com.openwrt.companion",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "OpenWrt Companion",
+        "width": 430,
+        "height": 700,
+        "minWidth": 380,
+        "minHeight": 560,
+        "decorations": false,
+        "transparent": true,
+        "resizable": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "wix": null,
+      "nsis": {
+        "installMode": "both"
+      }
+    }
+  }
+}
