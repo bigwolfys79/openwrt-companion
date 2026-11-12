@@ -5,9 +5,9 @@ use tauri::State;
 
 #[tauri::command]
 pub async fn get_snapshot(state: State<'_, AppState>) -> Result<Snapshot, String> {
-    let snap = match build_snapshot(&state).await {
-        Ok(s) => s,
-        Err(e) => Snapshot {
+    match build_snapshot(&state).await {
+        Ok(s) => Ok(s),
+        Err(e) => Ok(Snapshot {
             status: "offline".into(),
             ts: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -19,10 +19,14 @@ pub async fn get_snapshot(state: State<'_, AppState>) -> Result<Snapshot, String
             radios: vec![],
             stats: Default::default(),
             blocked_macs: vec![],
-        },
-    };
-    *state.last.write().unwrap() = Some(snap.clone());
-    Ok(snap)
+        }),
+    }
+}
+
+/// The SSH command that installs the companion ACL (frontend hint copies it).
+#[tauri::command]
+pub fn acl_setup_command_cmd() -> String {
+    crate::snapshot::acl_setup_command()
 }
 
 #[tauri::command]
@@ -50,34 +54,41 @@ pub async fn save_settings(
     profile_name: Option<String>,
     notify: Option<bool>,
 ) -> Result<(), String> {
-    let mut s = state.settings.inner.read().unwrap().clone();
-    let reconnect = (s.host != host || s.username != username)
-        || (!password.is_empty() && s.password() != password);
-    s.host = host.trim().to_string();
-    s.username = username.trim().to_string();
-    // empty password field = keep the stored one
-    if !password.is_empty() {
-        s.set_password(&password)?;
-    }
-    if let Some(n) = notify {
-        s.notify = n;
-    }
-    s.poll_interval_secs = poll_interval_secs.clamp(2, 60);
-    s.stats_rows = stats_rows.clamp(1, 3);
-    // persist the edited values into the active profile too (host/name/password),
-    // so switching profiles later doesn't lose them
-    if s.active_profile < s.profiles.len() {
-        let p = s.profiles.get_mut(s.active_profile).unwrap();
-        if let Some(name) = profile_name {
-            p.name = name.trim().to_string();
+    // Единая write-блокировка на весь read-modify-write: параллельные команды
+    // (set_alias / toggle_pin) не могут вклиниться между клоном и записью.
+    let reconnect = {
+        let mut s = state.settings.inner.write();
+        let recon = (s.host != host || s.username != username)
+            || (!password.is_empty() && s.password() != password);
+        s.host = host.trim().to_string();
+        s.username = username.trim().to_string();
+        // empty password field = keep the stored one
+        if !password.is_empty() {
+            s.set_password(&password)?;
         }
-        p.host = s.host.clone();
-        p.username = s.username.clone();
-        p.password_b64 = s.password_b64.clone();
-        p.has_password = s.has_password;
-    }
-    state.settings.save(&s).map_err(|e| e.to_string())?;
-    *state.settings.inner.write().unwrap() = s;
+        if let Some(n) = notify {
+            s.notify = n;
+        }
+        s.poll_interval_secs = poll_interval_secs.clamp(2, 60);
+        s.stats_rows = stats_rows.clamp(1, 3);
+        // persist the edited values into the active profile too (host/name/password),
+        // so switching profiles later doesn't lose them
+        if s.active_profile < s.profiles.len() {
+            let idx = s.active_profile;
+            let (cur_host, cur_user, cur_pass, cur_has) =
+                (s.host.clone(), s.username.clone(), s.password_b64.clone(), s.has_password);
+            let p = s.profiles.get_mut(idx).unwrap();
+            if let Some(name) = profile_name {
+                p.name = name.trim().to_string();
+            }
+            p.host = cur_host;
+            p.username = cur_user;
+            p.password_b64 = cur_pass;
+            p.has_password = cur_has;
+        }
+        state.settings.save(&s).map_err(|e| e.to_string())?;
+        recon
+    }; // лок освобождён до await
     if reconnect {
         state.reset_client();
     }
@@ -88,7 +99,7 @@ pub async fn save_settings(
 /// the next SSH connection re-learns it.
 #[tauri::command]
 pub fn ssh_forget_host_key(state: State<'_, AppState>) -> Result<(), String> {
-    let host = state.settings.inner.read().unwrap().host.clone();
+    let host = state.settings.inner.read().host.clone();
     crate::ssh::forget_host_key(&host)
 }
 
@@ -96,7 +107,8 @@ pub fn ssh_forget_host_key(state: State<'_, AppState>) -> Result<(), String> {
 /// pressing "Save" in the settings view.
 #[tauri::command]
 pub fn set_ui_prefs(state: State<'_, AppState>, language: String, theme: String) -> Result<(), String> {
-    let mut s = state.settings.inner.read().unwrap().clone();
+    // одна write-блокировка: никаких lost update между клоном и записью
+    let mut s = state.settings.inner.write();
     s.language = match language.as_str() {
         "en" => "en".into(),
         _ => "ru".into(),
@@ -105,9 +117,7 @@ pub fn set_ui_prefs(state: State<'_, AppState>, language: String, theme: String)
         "light" => "light".into(),
         _ => "dark".into(),
     };
-    state.settings.save(&s).map_err(|e| e.to_string())?;
-    *state.settings.inner.write().unwrap() = s;
-    Ok(())
+    state.settings.save(&s).map_err(|e| e.to_string())
 }
 
 /// Open a URL in the system browser (About section: project page).
@@ -116,6 +126,14 @@ pub fn open_external(url: String) -> Result<(), String> {
     // only https links, so the command can't be abused to launch arbitrary apps
     if !url.starts_with("https://") {
         return Err("only https URLs are allowed".into());
+    }
+    // white-list символов URL: cmd.exe-метасимволы (`"`, `&`, `|`, `<`, `>`,
+    // `^`, `%`) не могут попасть в строку команды — cmd-инъекция невозможна.
+    if !url
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "?=&%#+@./:-_~[]!$'()*,:;".contains(c))
+    {
+        return Err("URL содержит недопустимые символы".into());
     }
     #[cfg(windows)]
     {
@@ -138,22 +156,31 @@ pub fn open_external(url: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> Settings {
-    let mut s = state.settings.inner.read().unwrap().clone();
+    let mut s = state.settings.inner.read().clone();
     s.has_password = !s.password().is_empty();
+    // DPAPI-блоб не нужен фронтенду (он использует только hasPassword) —
+    // не отдаём зашифрованный пароль в webview
+    s.password_b64 = String::new();
     s
 }
 
 #[tauri::command]
 pub async fn set_alias(state: State<'_, AppState>, mac: String, name: String) -> Result<(), String> {
     let mac = mac.to_uppercase().replace('-', ":");
-    {
-        let mut s = state.settings.inner.write().unwrap();
-        if name.trim().is_empty() {
-            s.aliases.remove(&mac);
-        } else {
-            s.aliases.insert(mac.clone(), name.trim().to_string());
-        }
-        state.settings.save(&s).map_err(|e| e.to_string())?;
+    let mut s = state.settings.inner.write();
+    // при ошибке записи откатываем мутацию в памяти: диск и память не расходятся
+    let old = s.aliases.get(&mac).cloned();
+    if name.trim().is_empty() {
+        s.aliases.remove(&mac);
+    } else {
+        s.aliases.insert(mac.clone(), name.trim().to_string());
+    }
+    if let Err(e) = state.settings.save(&s) {
+        match old {
+            Some(v) => s.aliases.insert(mac, v),
+            None => s.aliases.remove(&mac),
+        };
+        return Err(e);
     }
     Ok(())
 }
@@ -286,7 +313,7 @@ pub fn show_window(app: tauri::AppHandle) {
 /// so the user doesn't have to paste it manually.
 #[tauri::command]
 pub async fn ssh_fix_limited(state: State<'_, AppState>) -> Result<String, String> {
-    let s = state.settings.inner.read().unwrap().clone();
+    let s = state.settings.inner.read().clone();
     let host = s.host.clone();
     let user = s.username.clone();
     let pass = s.password();
@@ -304,14 +331,19 @@ pub async fn ssh_fix_limited(state: State<'_, AppState>) -> Result<String, Strin
 #[tauri::command]
 pub async fn set_kind(state: State<'_, AppState>, mac: String, kind: String) -> Result<(), String> {
     let mac = mac.to_uppercase().replace('-', ":");
-    {
-        let mut s = state.settings.inner.write().unwrap();
-        if kind.is_empty() || kind == "auto" {
-            s.kinds.remove(&mac);
-        } else {
-            s.kinds.insert(mac, kind);
-        }
-        state.settings.save(&s).map_err(|e| e.to_string())?;
+    let mut s = state.settings.inner.write();
+    let old = s.kinds.get(&mac).cloned();
+    if kind.is_empty() || kind == "auto" {
+        s.kinds.remove(&mac);
+    } else {
+        s.kinds.insert(mac.clone(), kind);
+    }
+    if let Err(e) = state.settings.save(&s) {
+        match old {
+            Some(v) => s.kinds.insert(mac, v),
+            None => s.kinds.remove(&mac),
+        };
+        return Err(e);
     }
     Ok(())
 }
@@ -320,15 +352,20 @@ pub async fn set_kind(state: State<'_, AppState>, mac: String, kind: String) -> 
 #[tauri::command]
 pub async fn toggle_pin(state: State<'_, AppState>, mac: String) -> Result<bool, String> {
     let mac = mac.to_uppercase().replace('-', ":");
-    let mut s = state.settings.inner.write().unwrap();
+    let mut s = state.settings.inner.write();
     if let Some(pos) = s.pinned.iter().position(|m| m == &mac) {
         s.pinned.remove(pos);
-        let pinned = false;
-        state.settings.save(&*s).map_err(|e| e.to_string())?;
-        Ok(pinned)
+        if let Err(e) = state.settings.save(&*s) {
+            s.pinned.insert(pos, mac); // откат при ошибке записи
+            return Err(e);
+        }
+        Ok(false)
     } else {
-        s.pinned.insert(0, mac);
-        state.settings.save(&*s).map_err(|e| e.to_string())?;
+        s.pinned.insert(0, mac.clone());
+        if let Err(e) = state.settings.save(&*s) {
+            s.pinned.retain(|m| m != &mac); // откат при ошибке записи
+            return Err(e);
+        }
         Ok(true)
     }
 }
@@ -346,7 +383,7 @@ pub async fn wifi_scan(state: State<'_, AppState>, device: String) -> Result<ser
 /// Run a diagnostic preset over SSH. kind: "ping_gw" | "ping_dns" | "log" | "mem".
 #[tauri::command]
 pub async fn run_diag(state: State<'_, AppState>, kind: String) -> Result<String, String> {
-    let s = state.settings.inner.read().unwrap().clone();
+    let s = state.settings.inner.read().clone();
     let pass = s.password();
     if pass.is_empty() {
         return Err("Пароль не задан — укажите его в настройках".into());
@@ -369,7 +406,7 @@ pub async fn run_diag(state: State<'_, AppState>, kind: String) -> Result<String
 #[tauri::command]
 pub async fn backup_config(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<String, String> {
     use tauri::Manager;
-    let s = state.settings.inner.read().unwrap().clone();
+    let s = state.settings.inner.read().clone();
     let pass = s.password();
     if pass.is_empty() {
         return Err("Пароль не задан — укажите его в настройках".into());
@@ -412,7 +449,7 @@ fn chrono_fmt() -> String {
 /// Switch to another saved router profile (saves the current one first).
 #[tauri::command]
 pub async fn switch_profile(state: State<'_, AppState>, index: usize) -> Result<(), String> {
-    let mut s = state.settings.inner.write().unwrap();
+    let mut s = state.settings.inner.write();
     if index >= s.profiles.len() {
         return Err("нет такого профиля".into());
     }
@@ -441,7 +478,7 @@ pub async fn switch_profile(state: State<'_, AppState>, index: usize) -> Result<
 /// Add a new empty router profile and switch to it.
 #[tauri::command]
 pub async fn add_profile(state: State<'_, AppState>, name: String) -> Result<(), String> {
-    let mut s = state.settings.inner.write().unwrap();
+    let mut s = state.settings.inner.write();
     // flush current top-level values into the active profile
     let (cur_host, cur_user, cur_pass, cur_has) = (s.host.clone(), s.username.clone(), s.password_b64.clone(), s.has_password);
     if s.active_profile < s.profiles.len() {
@@ -474,7 +511,7 @@ pub async fn add_profile(state: State<'_, AppState>, name: String) -> Result<(),
 /// Delete a router profile by index (keeps at least one).
 #[tauri::command]
 pub async fn delete_profile(state: State<'_, AppState>, index: usize) -> Result<(), String> {
-    let mut s = state.settings.inner.write().unwrap();
+    let mut s = state.settings.inner.write();
     if s.profiles.len() <= 1 || index >= s.profiles.len() {
         return Err("нельзя удалить профиль".into());
     }

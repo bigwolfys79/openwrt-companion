@@ -1,6 +1,7 @@
 use reqwest::Client;
 use serde_json::{json, Value};
-use std::sync::{Arc, RwLock};
+use parking_lot::RwLock;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// ubus JSON-RPC client over the LuCI /ubus endpoint.
@@ -15,9 +16,20 @@ struct Inner {
     username: String,
     password: String,
     token: RwLock<String>,
+    /// single-flight gate for relogin: when a session expires, N parallel
+    /// calls all see the auth error, but only ONE performs login();
+    /// the rest wait on this mutex and retry with the fresh token.
+    relogin: tokio::sync::Mutex<()>,
 }
 
 const ANON: &str = "00000000000000000000000000000000";
+
+/// ubus error 6 = INVALID_TOKEN / unauthorized session; also accept the
+/// "authoriz" wording some builds return. Typed check instead of a fragile
+/// substring match anywhere in the message.
+fn is_auth_err(e: &str) -> bool {
+    e == "ubus error 6" || e.to_lowercase().contains("authoriz")
+}
 
 impl UbusClient {
     pub fn new(host: &str, username: &str, password: &str) -> Self {
@@ -33,6 +45,7 @@ impl UbusClient {
                 username: username.to_string(),
                 password: password.to_string(),
                 token: RwLock::new(ANON.to_string()),
+                relogin: tokio::sync::Mutex::new(()),
             }),
         }
     }
@@ -80,18 +93,27 @@ impl UbusClient {
             .and_then(|t| t.as_str())
             .ok_or("login failed: no session token (check credentials)")?
             .to_string();
-        *self.inner.token.write().unwrap() = token;
+        *self.inner.token.write() = token;
         Ok(())
     }
 
     /// Call an ubus object method; auto-relogins once on auth failure.
+    /// Relogin is single-flight: parallel callers that hit the same expired
+    /// session wait on a mutex and reuse the token obtained by the first one.
     pub async fn call(&self, object: &str, method: &str, params: Value) -> Result<Value, String> {
-        let tok = self.inner.token.read().unwrap().clone();
-        match self.rpc(json!([tok, object, method, params]), 2).await {
+        let old_tok = self.inner.token.read().clone();
+        match self.rpc(json!([old_tok, object, method, params]), 2).await {
             Ok(v) => Ok(v),
-            Err(e) if e.contains("ubus error 6") || e.to_lowercase().contains("authoriz") => {
-                self.login().await?;
-                let tok = self.inner.token.read().unwrap().clone();
+            Err(e) if is_auth_err(&e) => {
+                // only one caller re-logins; the others reuse the fresh token
+                let _guard = self.inner.relogin.lock().await;
+                let cur = self.inner.token.read().clone();
+                let tok = if cur != old_tok {
+                    cur // someone else already renewed it
+                } else {
+                    self.login().await?;
+                    self.inner.token.read().clone()
+                };
                 self.rpc(json!([tok, object, method, params]), 3).await
             }
             Err(e) => Err(e),

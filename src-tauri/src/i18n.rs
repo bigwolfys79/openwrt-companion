@@ -9,7 +9,7 @@ use tauri::{AppHandle, Manager};
 pub fn lang(app: &AppHandle) -> &'static str {
     let l = app
         .try_state::<crate::snapshot::AppState>()
-        .map(|s| s.settings.inner.read().unwrap().language.clone())
+        .map(|s| s.settings.inner.read().language.clone())
         .unwrap_or_default();
     if l == "en" { "en" } else { "ru" }
 }

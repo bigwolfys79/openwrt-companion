@@ -163,6 +163,7 @@ const EN: Dict = {
   "act.blocked": "Device blocked and disconnected from Wi-Fi",
   "act.unblocked": "Device unblocked",
   "act.err": "Error: {e}",
+  "ssh.keyLearned": "🔐 SSH host key of {host} pinned: {fp} (first connection — verify it matches your router)",
   // notifications
   "ntf.routerDown": "📡 Router unreachable",
   "ntf.devOnline": "🟢 Device connected",
@@ -313,6 +314,7 @@ const RU: Dict = {
   "act.blocked": "Устройство заблокировано и отключено от Wi-Fi",
   "act.unblocked": "Устройство разблокировано",
   "act.err": "Ошибка: {e}",
+  "ssh.keyLearned": "🔐 SSH-ключ роутера {host} закреплён: {fp} (первое подключение — сверьте отпечаток с роутером)",
   "ntf.routerDown": "📡 Роутер недоступен",
   "ntf.devOnline": "🟢 Устройство подключилось",
   "ntf.devOffline": "🔴 Устройство отключилось",

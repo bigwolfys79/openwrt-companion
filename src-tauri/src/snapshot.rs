@@ -3,7 +3,7 @@ use crate::ubus::UbusClient;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
-use std::sync::RwLock;
+use parking_lot::RwLock;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -107,23 +107,26 @@ pub struct Snapshot {
 pub struct AppState {
     pub settings: SettingsStore,
     pub client: RwLock<Option<UbusClient>>,
-    pub last: RwLock<Option<Snapshot>>,
+    /// переиспользуемая SSH-сессия для nftables-accounting (без реконнекта
+    /// на каждом опросе); сбрасывается вместе с ubus-клиентом
+    pub ssh: crate::ssh::SshPool,
 }
 
 impl AppState {
     pub fn client_or_new(&self) -> UbusClient {
-        let mut guard = self.client.write().unwrap();
+        let mut guard = self.client.write();
         if let Some(c) = guard.as_ref() {
             return c.clone();
         }
-        let s = self.settings.inner.read().unwrap().clone();
+        let s = self.settings.inner.read().clone();
         let c = UbusClient::new(&s.host, &s.username, &s.password());
         *guard = Some(c.clone());
         c
     }
 
     pub fn reset_client(&self) {
-        *self.client.write().unwrap() = None;
+        *self.client.write() = None;
+        self.ssh.reset();
     }
 }
 
@@ -169,7 +172,7 @@ fn str_at(v: &Value, path: &[&str]) -> Option<String> {
 /// Note: with HW/SW flow offloading the forward hook undercounts offloaded
 /// flows — the same caveat as the DSA port counters.
 async fn lan_accounting(state: &AppState) -> Result<(HashMap<String, (u64, u64)>, HashSet<String>), String> {
-    let s = state.settings.inner.read().unwrap().clone();
+    let s = state.settings.inner.read().clone();
     let pass = s.password();
     if pass.is_empty() {
         return Err("пароль не задан".into());
@@ -184,12 +187,15 @@ async fn lan_accounting(state: &AppState) -> Result<(HashMap<String, (u64, u64)>
             nft add rule inet oc_acc oc_fwd ip saddr $ip counter comment \\\"oc-s-$ip\\\" ; \
         done ; \
         nft list chain inet oc_acc oc_fwd | grep 'oc-' ;         echo ===NEIGH=== ;         ip neigh show";
+    // пул держит одну SSH-сессию между опросами: вместо нового
+    // TCP+kex+auth каждые несколько секунд — только новый канал
     let out = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        crate::ssh::run_command(&s.host, &s.username, &pass, script),
+        state.ssh.run(&s.host, &s.username, &pass, script),
     )
     .await
     .map_err(|_| "SSH таймаут".to_string())??;
+    let out = String::from_utf8_lossy(&out).trim().to_string();
 
     let mut map: HashMap<String, (u64, u64)> = HashMap::new();
     let mut reachable: HashSet<String> = HashSet::new();
@@ -254,14 +260,28 @@ fn tok_next_num(line: &str, tok: &str) -> Option<u64> {
 pub async fn build_snapshot(state: &AppState) -> Result<Snapshot, String> {
     let client = state.client_or_new();
     let aliases: HashMap<String, String> =
-        state.settings.inner.read().unwrap().aliases.clone();
+        state.settings.inner.read().aliases.clone();
     let kind_overrides: HashMap<String, String> =
-        state.settings.inner.read().unwrap().kinds.clone();
-    let pinned_list: Vec<String> = state.settings.inner.read().unwrap().pinned.clone();
+        state.settings.inner.read().kinds.clone();
+    let pinned_list: Vec<String> = state.settings.inner.read().pinned.clone();
 
     // reachability + auth check
     client.login().await?;
     client.call("system", "board", json!({})).await?;
+
+    // --- независимые RPC выполняются параллельно через tokio::join! ---
+    // раньше каждый ждал предыдущего, растягивая цикл опроса в 2-3 раза.
+    // Только network.device status (зависит от wan_device из dump) и
+    // iwinfo assoclist (зависит от if_to_radio) остаются последовательными.
+    let (wl_res, arp_res, dump_res, hints_res, dhcp_res, fw_res, info_res) = tokio::join!(
+        client.call("luci-rpc", "getWirelessDevices", json!({})),
+        client.call("file", "exec", json!({"command": "/bin/cat", "params": ["/proc/net/arp"]})),
+        client.call("network.interface", "dump", json!({})),
+        client.call("luci-rpc", "getHostHints", json!({})),
+        client.call("luci-rpc", "getDHCPLeases", json!({})),
+        client.call("uci", "get", json!({"config": "firewall"})),
+        client.call("system", "info", json!({})),
+    );
 
     // wifi interface -> radio mapping + band info.
     // Primary source: luci-rpc getWirelessDevices (always ACL-allowed for LuCI sessions).
@@ -269,7 +289,7 @@ pub async fn build_snapshot(state: &AppState) -> Result<Snapshot, String> {
     let mut radios: Vec<Radio> = Vec::new();
     let mut if_to_radio: HashMap<String, (String, String)> = HashMap::new(); // ifname -> (radio, band)
     let mut station_clients: HashMap<String, (Option<i64>, String, String, Option<u64>, Option<u64>)> = HashMap::new(); // mac -> (signal, iface, radio, rx_bytes, tx_bytes)
-    if let Ok(wl) = client.call("luci-rpc", "getWirelessDevices", json!({})).await {
+    if let Ok(wl) = wl_res {
         if let Some(map) = wl.as_object() {
             for (radio_dev, r) in map {
                 // band comes lowercase ("2g"/"5g") from uci - normalize
@@ -326,7 +346,11 @@ pub async fn build_snapshot(state: &AppState) -> Result<Snapshot, String> {
     // wifi clients: prefer iwinfo assoclist (richer data; needs the ACL grant),
     // fall back to stations from getWirelessDevices
     let mut wifi_clients: HashMap<String, (Option<i64>, String, String, Option<u64>, Option<u64>)> = station_clients;
-    if let Ok(devs) = client.call("iwinfo", "devices", json!({})).await {
+    // результат этого же вызова служит флагом ограниченных ACL — раньше
+    // iwinfo devices вызывался повторно в конце build_snapshot (лишний RPC)
+    let iwinfo_res = client.call("iwinfo", "devices", json!({})).await;
+    let limited = iwinfo_res.is_err();
+    if let Ok(devs) = iwinfo_res {
         let names: Vec<String> = devs
             .get("devices")
             .and_then(|d| d.as_array())
@@ -359,10 +383,7 @@ pub async fn build_snapshot(state: &AppState) -> Result<Snapshot, String> {
     let mut arp_clients: HashSet<String> = HashSet::new();
     // complete ARP entries on non-LAN sides (wan etc.) - hosts to hide
     let mut other_macs: HashSet<String> = HashSet::new();
-    if let Ok(ex) = client
-        .call("file", "exec", json!({"command": "/bin/cat", "params": ["/proc/net/arp"]}))
-        .await
-    {
+    if let Ok(ex) = arp_res {
         if let Some(txt) = ex.get("stdout").and_then(|s| s.as_str()) {
             for line in txt.lines().skip(1) {
                 let cols: Vec<&str> = line.split_whitespace().collect();
@@ -389,7 +410,7 @@ pub async fn build_snapshot(state: &AppState) -> Result<Snapshot, String> {
 
     // the router's own interface IPs (to exclude itself / WAN uplink from the list)
     let mut own_ips: HashSet<String> = HashSet::new();
-    let iface_dump = client.call("network.interface", "dump", json!({})).await.ok();
+    let iface_dump = dump_res.ok();
     if let Some(dump) = &iface_dump {
         if let Some(ifs) = dump.get("interface").and_then(|i| i.as_array()) {
             for i in ifs {
@@ -406,7 +427,7 @@ pub async fn build_snapshot(state: &AppState) -> Result<Snapshot, String> {
 
     // host hints (names + ips)
     let mut hints: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
-    if let Ok(h) = client.call("luci-rpc", "getHostHints", json!({})).await {
+    if let Ok(h) = hints_res {
         // result is either {"devices": {MAC: hint}} or a top-level {MAC: hint} map
         let hint_obj: Vec<(String, Value)> = h
             .get("devices")
@@ -426,7 +447,7 @@ pub async fn build_snapshot(state: &AppState) -> Result<Snapshot, String> {
     }
 
     // dhcp leases
-    if let Ok(l) = client.call("luci-rpc", "getDHCPLeases", json!({})).await {
+    if let Ok(l) = dhcp_res {
         if let Some(leases) = l.get("dhcp_leases").and_then(|d| d.as_array()) {
             for lease in leases {
                 let mac = match lease.get("macaddr").and_then(|m| m.as_str()) {
@@ -446,7 +467,7 @@ pub async fn build_snapshot(state: &AppState) -> Result<Snapshot, String> {
 
     // blocked MACs from uci firewall rules named oc-block-*
     let mut blocked_macs: Vec<String> = Vec::new();
-    if let Ok(fw) = client.call("uci", "get", json!({"config": "firewall"})).await {
+    if let Ok(fw) = fw_res {
         if let Some(values) = fw.get("values").and_then(|v| v.as_object()) {
             for (_, sec) in values {
                 let stype = sec.get(".type").and_then(|t| t.as_str()).unwrap_or("");
@@ -543,7 +564,7 @@ pub async fn build_snapshot(state: &AppState) -> Result<Snapshot, String> {
 
     // stats
     let mut stats = Stats::default();
-    if let Ok(info) = client.call("system", "info", json!({})).await {
+    if let Ok(info) = info_res {
         stats.uptime = info.get("uptime").and_then(|u| u.as_u64());
         stats.mem_total = info.get("memory").and_then(|m| m.get("total")).and_then(|t| t.as_u64());
         stats.mem_free = info.get("memory").and_then(|m| m.get("free")).and_then(|t| t.as_u64());
@@ -704,8 +725,8 @@ pub async fn build_snapshot(state: &AppState) -> Result<Snapshot, String> {
         stats.temp = Some((milli / 1000.0 * 10.0).round() / 10.0);
     }
 
-    // detect limited ACLs: iwinfo must be callable for full Wi-Fi client data
-    let limited = client.call("iwinfo", "devices", json!({})).await.is_err();
+    // limited ACLs are detected by the single iwinfo devices call above
+
 
     Ok(Snapshot {
         status: "ok".into(),
@@ -721,9 +742,6 @@ pub async fn build_snapshot(state: &AppState) -> Result<Snapshot, String> {
         blocked_macs,
     })
 }
-
-/// Helper used by commands to touch settings type (keeps import used).
-pub fn _settings_touch(_s: &SettingsStore) {}
 
 /// The SSH command that installs the companion ACL and restarts rpcd.
 /// Shared by the frontend hint and the automatic `ssh_fix_limited` command.

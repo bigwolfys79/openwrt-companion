@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::RwLock;
+use parking_lot::RwLock;
 use tauri::{AppHandle, Manager};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -240,7 +240,9 @@ pub struct SettingsStore {
 impl SettingsStore {
     pub fn load(app: &AppHandle) -> Self {
         let dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let _ = fs::create_dir_all(&dir);
+        if let Err(e) = fs::create_dir_all(&dir) {
+            eprintln!("settings: cannot create data dir {:?}: {e}", dir);
+        }
         let path = dir.join("config.json");
         let mut settings = fs::read_to_string(&path)
             .ok()
@@ -251,10 +253,18 @@ impl SettingsStore {
             && !settings.password_b64.starts_with("dpapi:")
             && !settings.password_b64.starts_with("plain:");
         if legacy {
+            let legacy_value = settings.password_b64.clone();
             let plain = b64_decode(&settings.password_b64);
             if settings.set_password(&plain).is_ok() {
-                if let Ok(json) = serde_json::to_string_pretty(&settings) {
-                    let _ = fs::write(&path, json);
+                let persisted = serde_json::to_string_pretty(&settings)
+                    .ok()
+                    .map(|json| fs::write(&path, json).is_ok())
+                    .unwrap_or(false);
+                if !persisted {
+                    // откат: не заявляем has_password, пока блоб не сохранён на диск
+                    eprintln!("settings: failed to persist migrated password — keeping legacy value");
+                    settings.password_b64 = legacy_value;
+                    settings.has_password = !settings.password_b64.is_empty();
                 }
             }
         } else {
@@ -276,6 +286,9 @@ impl SettingsStore {
 
     pub fn save(&self, s: &Settings) -> Result<(), String> {
         let json = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
-        fs::write(&self.path, json).map_err(|e| e.to_string())
+        fs::write(&self.path, json).map_err(|e| {
+            eprintln!("settings: failed to write {:?}: {e}", self.path);
+            e.to_string()
+        })
     }
 }

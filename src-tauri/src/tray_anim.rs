@@ -2,7 +2,7 @@
 //! traffic level, with a soft pulse; plus short color flashes on device
 //! connect/disconnect events and a static yellow state when offline.
 
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::Duration;
 use tauri::image::Image;
 use tauri::{AppHandle, Manager};
@@ -102,13 +102,18 @@ fn draw_frame(level: u8, phase: usize, flash: Option<u8>, offline: bool) -> Imag
 }
 
 /// Animation loop: swaps tray icon frames every TICK_MS.
+/// When nothing is animating (level 0, online, no flash) the frame is static:
+/// it is drawn once and set_icon is skipped until the state changes, so the
+/// loop does not repaint the tray 3 times a second around the clock.
 pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut phase: usize = 0;
+        // подпись последнего отрисованного статичного кадра
+        let mut static_drawn: Option<(u8, bool)> = None;
         loop {
             let (level, offline, flash) = {
                 let st = app.state::<Mutex<AnimState>>();
-                let mut a = st.lock().unwrap();
+                let mut a = st.lock();
                 let flash = a.flash.as_ref().map(|(k, _)| *k);
                 if let Some((_, t)) = a.flash.as_mut() {
                     *t -= 1;
@@ -118,6 +123,17 @@ pub fn start(app: AppHandle) {
                 }
                 (a.level, a.offline, flash)
             };
+            let static_idle = level == 0 && !offline && flash.is_none();
+            if static_idle && static_drawn == Some((level, offline)) {
+                // кадр не менялся — не перерисовываем
+                tokio::time::sleep(Duration::from_millis(TICK_MS)).await;
+                continue;
+            }
+            if static_idle {
+                static_drawn = Some((level, offline));
+            } else {
+                static_drawn = None;
+            }
             phase = (phase + 1) % 8;
             let img = draw_frame(level, phase, flash, offline);
             if let Some(tray) = app.tray_by_id("main") {
@@ -129,15 +145,15 @@ pub fn start(app: AppHandle) {
 }
 
 pub fn set_level(app: &AppHandle, level: u8) {
-    app.state::<Mutex<AnimState>>().lock().unwrap().level = level.min(3);
+    app.state::<Mutex<AnimState>>().lock().level = level.min(3);
 }
 
 pub fn set_offline(app: &AppHandle, offline: bool) {
-    app.state::<Mutex<AnimState>>().lock().unwrap().offline = offline;
+    app.state::<Mutex<AnimState>>().lock().offline = offline;
 }
 
 pub fn flash(app: &AppHandle, kind: u8) {
     let st = app.state::<Mutex<AnimState>>();
-    let mut st = st.lock().unwrap();
+    let mut st = st.lock();
     st.flash = Some((kind, 7)); // ~2.5 s of blinking frames
 }

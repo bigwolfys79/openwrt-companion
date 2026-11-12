@@ -244,10 +244,12 @@ function RadioControls({
 }
 
 function LimitedBanner({ onFixed }: { onFixed: () => void }) {
-  const cmd =
-    `cat > /usr/share/rpcd/acl.d/owrt-companion.json <<'EOF'\n` +
-    `{"companion":{"description":"OpenWrt Companion","read":{"ubus":{"iwinfo":["devices","info","assoclist"],"network.wireless":["status"],"network.interface":["status"],"network.device":["status"],"luci-rpc":["getHostHints","getDHCPLeases","getWirelessDevices"],"system":["info","board"]}},"write":{"ubus":{"hostapd.*":["del_client"],"network.wireless":["up","down"],"uci":["add","set","delete","commit"],"file":["exec"]},"file":{"/bin/cat":["exec"]}}}}\n` +
-    `EOF\n/etc/init.d/rpcd restart`;
+  // единый источник команды ACL — бэкенд, чтобы копируемая вручную версия
+  // никогда не разъезжалась с той, что выполняет ssh_fix_limited
+  const [cmd, setCmd] = useState("");
+  useEffect(() => {
+    invoke<string>("acl_setup_command_cmd").then(setCmd).catch(() => {});
+  }, []);
   const [copied, setCopied] = useState(false);
   const [fixing, setFixing] = useState(false);
   const [fixErr, setFixErr] = useState<string | null>(null);
@@ -313,6 +315,14 @@ function DeviceCard({
 }) {
   const [draft, setDraft] = useState(dev.alias ?? "");
   const [kindMenu, setKindMenu] = useState(false);
+  // guard: Enter в форме вызывает submit, а клик мимо — onBlur; без флага
+  // onSaveRename срабатывал бы дважды и вторым вызовом затирал alias
+  const savedRef = useRef(false);
+  const saveOnce = (mac: string, name: string) => {
+    if (savedRef.current) return;
+    savedRef.current = true;
+    onSaveRename(mac, name);
+  };
   // close the kind picker when clicking anywhere outside it
   useEffect(() => {
     if (!kindMenu) return;
@@ -346,14 +356,14 @@ function DeviceCard({
       <div className="device-main">
         {isRenaming ? (
           <form
-            onSubmit={(e) => { e.preventDefault(); onSaveRename(dev.mac, draft); }}
+            onSubmit={(e) => { e.preventDefault(); saveOnce(dev.mac, draft); }}
             className="rename-row"
           >
             <input
               autoFocus
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
-              onBlur={() => onSaveRename(dev.mac, draft)}
+              onBlur={() => saveOnce(dev.mac, draft)}
               placeholder={t("device.namePh")}
             />
           </form>
@@ -941,9 +951,12 @@ export default function App() {
       .catch(() => {});
   }, []);
 
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showToast = useCallback((msg: string) => {
     setToast(msg);
-    setTimeout(() => setToast(null), 2600);
+    // отменяем таймер предыдущего тоста, иначе новый исчезнет раньше времени
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 2600);
   }, []);
 
   /* --- language & theme, saved immediately (no "Save" needed) --- */
@@ -1000,8 +1013,13 @@ export default function App() {
       setSnap(e.payload);
       diffNotify(e.payload);
     });
-    return () => { un.then((f) => f()); };
-  }, [diffNotify]);
+    // TOFU-прозрачность: при первом SSH-подключении показываем закреплённый
+    // отпечаток, чтобы пользователь мог сверить его с роутером
+    const unKey = listen<{ host: string; fingerprint: string }>("ssh-hostkey-learned", (e) => {
+      showToast(t("ssh.keyLearned", { host: e.payload.host, fp: e.payload.fingerprint }));
+    });
+    return () => { un.then((f) => f()); unKey.then((f) => f()); };
+  }, [diffNotify, showToast]);
 
   // keep a ref mirror so event handler can diff
   const snapRef = useRef<Snapshot | null>(null);

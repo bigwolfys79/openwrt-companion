@@ -23,14 +23,15 @@ pub fn run() {
             let store = settings::SettingsStore::load(&handle);
             ssh::init_hostkeys(
                 &handle.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+                handle.clone(),
             );
             app.manage(AppState {
                 settings: store,
-                client: std::sync::RwLock::new(None),
-                last: std::sync::RwLock::new(None),
+                client: parking_lot::RwLock::new(None),
+                ssh: crate::ssh::SshPool::default(),
             });
             tray::setup(&handle)?;
-            app.manage(std::sync::Mutex::new(tray_anim::AnimState::default()));
+            app.manage(parking_lot::Mutex::new(tray_anim::AnimState::default()));
             tray_anim::start(handle.clone());
             monitor::start(handle.clone());
             // show the window on first launch so the user can enter settings
@@ -61,6 +62,7 @@ pub fn run() {
             commands::ssh_forget_host_key,
             commands::set_ui_prefs,
             commands::open_external,
+            commands::acl_setup_command_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running OpenWrt Companion");

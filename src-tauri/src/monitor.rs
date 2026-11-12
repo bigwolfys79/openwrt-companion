@@ -1,6 +1,6 @@
 use crate::snapshot::{build_snapshot, Snapshot};
 use crate::tray_anim;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::{AppHandle, Emitter, Manager};
@@ -10,20 +10,31 @@ use tauri::{AppHandle, Emitter, Manager};
 pub fn start(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut prev: Option<Snapshot> = None;
+        // подряд идущие неудачи: оффлайн объявляется только после двух, чтобы
+        // одиночный сетевой выброс не флапал иконкой и оффлайн-уведомлением
+        let mut err_streak: u32 = 0;
         loop {
             let interval = {
                 let state = app.state::<crate::snapshot::AppState>();
-                let secs = state.settings.inner.read().unwrap().poll_interval_secs;
+                let secs = state.settings.inner.read().poll_interval_secs;
                 secs
             };
             let snap = build_snapshot(&app.state::<crate::snapshot::AppState>()).await;
             match &snap {
                 Ok(s) => {
+                    err_streak = 0;
                     let _ = app.emit("snapshot", s);
                     let _ = update_tray(&app, s, prev.as_ref());
                     prev = Some(s.clone());
                 }
                 Err(e) => {
+                    err_streak += 1;
+                    if err_streak < 2 {
+                        // одиночный сбой: оставляем в UI последний хороший снапшот
+                        prev = None;
+                        tokio::time::sleep(Duration::from_secs(interval.max(2) as u64)).await;
+                        continue;
+                    }
                     let offline = crate::snapshot::Snapshot {
                         status: "offline".into(),
                         ts: std::time::SystemTime::now()
@@ -77,8 +88,11 @@ fn wan_speed(prev: Option<&Snapshot>, cur: &Snapshot) -> (f64, f64) {
     );
     let mut best_score = best.0 + best.1;
     let mut best_split = best.0 < 0.75 * best.1 || best.1 < 0.75 * best.0;
+    // индекс по имени интерфейса вместо O(n²) find в цикле
+    let prev_by_iface: HashMap<&str, &crate::snapshot::WanCounter> =
+        p.stats.wan_counters.iter().map(|x| (x.iface.as_str(), x)).collect();
     for c in &cur.stats.wan_counters {
-        if let Some(pc) = p.stats.wan_counters.iter().find(|x| x.iface == c.iface) {
+        if let Some(pc) = prev_by_iface.get(c.iface.as_str()) {
             let r = rate(Some(c.rx_bytes), Some(pc.rx_bytes));
             let t = rate(Some(c.tx_bytes), Some(pc.tx_bytes));
             let split = r < 0.75 * t || t < 0.75 * r;
@@ -160,11 +174,14 @@ fn update_tray(app: &AppHandle, s: &Snapshot, prev: Option<&Snapshot>) -> tauri:
                 _ => 0.0,
             }
         };
+        // индекс предыдущего снапшота по MAC вместо find в цикле
+        let prev_by_mac: HashMap<&str, &crate::snapshot::Device> =
+            p.devices.iter().map(|x| (x.mac.as_str(), x)).collect();
         for d in &s.devices {
             if !d.online {
                 continue;
             }
-            if let Some(pd) = p.devices.iter().find(|x| x.mac == d.mac) {
+            if let Some(pd) = prev_by_mac.get(d.mac.as_str()) {
                 // AP tx -> download, AP rx -> upload (same as the frontend)
                 speeds.push((
                     d.mac.clone(),
