@@ -34,8 +34,10 @@ fn kind_rgb(kind: u8) -> [u8; 3] {
     }
 }
 
-/// Draw one frame: dark rounded backdrop + 4 bars, first `level+1` lit.
+/// Draw one frame: 4 bars on a transparent background, first `level+1` lit.
 /// `phase` drives the pulse alpha of lit bars; flash overrides colors.
+/// (Раньше рисовалась тёмная круглая подложка с обводкой — на тёмной панели
+/// она выглядела посторонним «кружком»; теперь фон полностью прозрачный.)
 fn draw_frame(level: u8, phase: usize, flash: Option<u8>, offline: bool) -> Image<'static> {
     let mut px = vec![0u8; (SIZE * SIZE * 4) as usize];
     let put = |px: &mut [u8], x: u32, y: u32, c: [u8; 3], a: u8| {
@@ -48,24 +50,6 @@ fn draw_frame(level: u8, phase: usize, flash: Option<u8>, offline: bool) -> Imag
         px[i + 2] = c[2];
         px[i + 3] = a;
     };
-
-    // rounded dark backdrop
-    let bg = [22u8, 26, 36];
-    let stroke = [70u8, 80, 100];
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let dx = (x as i32 - 16).abs().min(4);
-            let dy = (y as i32 - 16).abs().min(4);
-            let inside = (dx as f32).hypot(dy as f32) < 4.2;
-            let ring = ((x as f32 - 15.5).hypot(y as f32 - 15.5)).abs();
-            if ring < 15.5 {
-                put(&mut px, x, y, bg, if inside { 230 } else { 200 });
-            }
-            if ring > 14.2 && ring < 15.8 {
-                put(&mut px, x, y, stroke, 190);
-            }
-        }
-    }
 
     let (lit, color, a_base): (usize, [u8; 3], i32) = if let Some(k) = flash {
         (4, kind_rgb(k), 255)
