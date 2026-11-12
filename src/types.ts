@@ -78,4 +78,5 @@ export interface Settings {
   language: string;
   theme: string;
   alwaysOnTop: boolean;
+  startMinimized: boolean;
 }

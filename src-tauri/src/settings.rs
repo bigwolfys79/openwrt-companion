@@ -46,6 +46,9 @@ pub struct Settings {
     /// main window always on top (tray panel convenience; user-toggleable)
     #[serde(default = "default_true")]
     pub always_on_top: bool,
+    /// don't show the main window on app launch (tray-only start)
+    #[serde(default)]
+    pub start_minimized: bool,
 }
 
 fn default_language() -> String {
@@ -97,6 +100,7 @@ impl Default for Settings {
             language: default_language(),
             theme: default_theme(),
             always_on_top: true,
+            start_minimized: false,
         }
     }
 }

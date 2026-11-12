@@ -141,6 +141,15 @@ pub fn set_always_on_top(
     Ok(())
 }
 
+/// Toggle whether the app starts minimized to the tray (no main window on launch).
+#[tauri::command]
+pub fn set_start_minimized(state: State<'_, AppState>, on: bool) -> Result<(), String> {
+    // одна write-блокировка: без гонок с save_settings / set_always_on_top
+    let mut s = state.settings.inner.write();
+    s.start_minimized = on;
+    state.settings.save(&s).map_err(|e| e.to_string())
+}
+
 /// Open a URL in the system browser (About section: project page).
 #[tauri::command]
 pub fn open_external(url: String) -> Result<(), String> {

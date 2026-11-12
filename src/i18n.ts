@@ -166,6 +166,9 @@ const EN: Dict = {
   "ssh.keyLearned": "🔐 SSH host key of {host} pinned: {fp} (first connection — verify it matches your router)",
   // settings: always on top
   "set.aot": "Always on top",
+  "set.startMin": "Start minimized to tray",
+  "set.startMinOn": "To tray",
+  "set.startMinOff": "Show window",
   "set.aotOn": "On top",
   "set.aotOff": "Normal",
   // notifications
@@ -320,6 +323,9 @@ const RU: Dict = {
   "act.err": "Ошибка: {e}",
   "ssh.keyLearned": "🔐 SSH-ключ роутера {host} закреплён: {fp} (первое подключение — сверьте отпечаток с роутером)",
   "set.aot": "Поверх всех окон",
+  "set.startMin": "Сворачивать в трей при запуске",
+  "set.startMinOn": "В трей",
+  "set.startMinOff": "Показывать окно",
   "set.aotOn": "Поверх всех",
   "set.aotOff": "Обычное",
   "ntf.routerDown": "📡 Роутер недоступен",

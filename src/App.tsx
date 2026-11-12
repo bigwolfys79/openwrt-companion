@@ -663,6 +663,7 @@ function SettingsView({
   const [testing, setTesting] = useState(false);
   const [autoStart, setAutoStart] = useState(false);
   const [aot, setAot] = useState(true);
+  const [startMin, setStartMin] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [notify, setNotify] = useState(true);
   const [version, setVersion] = useState("");
@@ -673,6 +674,7 @@ function SettingsView({
       setProfileName(p?.name ?? "");
       setNotify(v.notify !== false);
       setAot(v.alwaysOnTop !== false);
+      setStartMin(v.startMinimized === true);
     });
   }, []);
 
@@ -732,6 +734,18 @@ function SettingsView({
     } catch (e) {
       setAot(prev);
       setStatus({ ok: false, msg: t("set.errPrefix", { ctx: t("set.aot"), e: String(e) }) });
+    }
+  };
+
+  const toggleStartMin = async () => {
+    const next = !startMin;
+    const prev = startMin;
+    setStartMin(next); // оптимистично; при ошибке откатываем
+    try {
+      await invoke("set_start_minimized", { on: next });
+    } catch (e) {
+      setStartMin(prev);
+      setStatus({ ok: false, msg: t("set.errPrefix", { ctx: t("set.startMin"), e: String(e) }) });
     }
   };
 
@@ -897,6 +911,14 @@ function SettingsView({
         <div className="range-row">
           <button type="button" className={`btn ${aot ? "btn-primary" : "btn-ghost"}`} onClick={toggleAot}>
             {aot ? t("set.aotOn") : t("set.aotOff")}
+          </button>
+        </div>
+      </label>
+      <label>
+        {t("set.startMin")}
+        <div className="range-row">
+          <button type="button" className={`btn ${startMin ? "btn-primary" : "btn-ghost"}`} onClick={toggleStartMin}>
+            {startMin ? t("set.startMinOn") : t("set.startMinOff")}
           </button>
         </div>
       </label>

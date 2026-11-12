@@ -21,8 +21,9 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             let store = settings::SettingsStore::load(&handle);
-            // читаем флаг до перемещения store в AppState
+            // читаем флаги до перемещения store в AppState
             let aot_enabled = store.inner.read().always_on_top;
+            let start_minimized = store.inner.read().start_minimized;
             ssh::init_hostkeys(
                 &handle.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
                 handle.clone(),
@@ -36,8 +37,11 @@ pub fn run() {
             app.manage(parking_lot::Mutex::new(tray_anim::AnimState::default()));
             tray_anim::start(handle.clone());
             monitor::start(handle.clone());
-            // show the window on first launch so the user can enter settings
-            tray::show_main_window(&handle, false);
+            // show the window on first launch so the user can enter settings;
+            // when "start minimized to tray" is on, skip it (tray/monitor work anyway)
+            if !start_minimized {
+                tray::show_main_window(&handle, false);
+            }
             // применяем сохранённый флаг "поверх всех окон" (окно создано из
             // конфига с alwaysOnTop: true до setup, поэтому достаточно снять,
             // если пользователь его выключал)
@@ -72,6 +76,7 @@ pub fn run() {
             commands::ssh_forget_host_key,
             commands::set_ui_prefs,
             commands::set_always_on_top,
+            commands::set_start_minimized,
             commands::open_external,
             commands::acl_setup_command_cmd,
         ])
