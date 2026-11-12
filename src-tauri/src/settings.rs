@@ -49,6 +49,9 @@ pub struct Settings {
     /// don't show the main window on app launch (tray-only start)
     #[serde(default)]
     pub start_minimized: bool,
+    /// тарифный план в Мбит/с для шкалы трея (0 = авто-пороги 0.5/5/50 Мбит/с)
+    #[serde(default)]
+    pub tariff_mbit: u32,
 }
 
 fn default_language() -> String {
@@ -101,6 +104,7 @@ impl Default for Settings {
             theme: default_theme(),
             always_on_top: true,
             start_minimized: false,
+            tariff_mbit: 0,
         }
     }
 }

@@ -53,6 +53,7 @@ pub async fn save_settings(
     stats_rows: u32,
     profile_name: Option<String>,
     notify: Option<bool>,
+    tariff_mbit: Option<u32>,
 ) -> Result<(), String> {
     // Единая write-блокировка на весь read-modify-write: параллельные команды
     // (set_alias / toggle_pin) не могут вклиниться между клоном и записью.
@@ -71,6 +72,10 @@ pub async fn save_settings(
         }
         s.poll_interval_secs = poll_interval_secs.clamp(2, 60);
         s.stats_rows = stats_rows.clamp(1, 3);
+        // тариф для шкалы трея: 0 = авто-пороги; ограничим разумным диапазоном
+        if let Some(t) = tariff_mbit {
+            s.tariff_mbit = t.clamp(0, 100_000);
+        }
         // persist the edited values into the active profile too (host/name/password),
         // so switching profiles later doesn't lose them
         if s.active_profile < s.profiles.len() {

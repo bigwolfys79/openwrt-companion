@@ -79,4 +79,5 @@ export interface Settings {
   theme: string;
   alwaysOnTop: boolean;
   startMinimized: boolean;
+  tariffMbit: number;
 }

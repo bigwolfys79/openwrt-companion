@@ -763,6 +763,7 @@ function SettingsView({
         statsRows: s.statsRows ?? 2,
         profileName,
         notify,
+        tariffMbit: s.tariffMbit ?? 0,
       });
       const model = await invoke<string>("test_connection");
       setStatus({ ok: true, msg: t("set.connected", { model }) });
@@ -896,6 +897,21 @@ function SettingsView({
           <button type="button" className={`btn ${theme === "light" ? "btn-primary" : "btn-ghost"}`} onClick={() => onTheme("light")}>
             {t("set.themeLight")}
           </button>
+        </div>
+      </label>
+      <label>
+        {t("set.tariff")}
+        <div className="range-row">
+          <input
+            type="number"
+            className="channel-select"
+            min={0}
+            max={100000}
+            value={s.tariffMbit ?? 0}
+            title={t("set.tariffHint")}
+            onChange={(e) => setS({ ...s, tariffMbit: Math.max(0, Math.floor(Number(e.target.value) || 0)) })}
+          />
+          <span className="hint">{t("set.tariffHint")}</span>
         </div>
       </label>
       <label>

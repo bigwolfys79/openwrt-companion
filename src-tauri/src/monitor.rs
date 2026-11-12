@@ -141,7 +141,25 @@ fn update_tray(app: &AppHandle, s: &Snapshot, prev: Option<&Snapshot>) -> tauri:
 
     // traffic level 0..3 -> bar animation
     let (down, _up) = wan_speed(prev, s);
-    let level = if down < 500_000.0 {
+    // шкала от тарифа: пользователь указал скорость тарифного плана (Мбит/с) —
+    // столбики показывают заполнение канала (<10% / <50% / <90% / ≥90%).
+    // 0 = авто: старые фиксированные пороги 0.5 / 5 / 50 Мбит/с
+    let tariff_bps = {
+        let state = app.state::<crate::snapshot::AppState>();
+        let t = state.settings.inner.read().tariff_mbit;
+        f64::from(t) * 1_000_000.0
+    };
+    let level = if tariff_bps > 0.0 {
+        if down < tariff_bps * 0.10 {
+            0
+        } else if down < tariff_bps * 0.50 {
+            1
+        } else if down < tariff_bps * 0.90 {
+            2
+        } else {
+            3
+        }
+    } else if down < 500_000.0 {
         0
     } else if down < 5_000_000.0 {
         1
