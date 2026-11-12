@@ -5,6 +5,11 @@ description = "OpenWrt Companion - tray companion for your OpenWrt router"
 edition = "2021"
 rust-version = "1.77"
 
+[lints.rust]
+# линкер MSVC печатает "Создается библиотека …dll.lib" при сборке cdylib —
+# это информационное сообщение, не проблема; глушим соответствующий lint
+linker_messages = "allow"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
