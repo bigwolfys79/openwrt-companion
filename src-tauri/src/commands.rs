@@ -120,6 +120,27 @@ pub fn set_ui_prefs(state: State<'_, AppState>, language: String, theme: String)
     state.settings.save(&s).map_err(|e| e.to_string())
 }
 
+/// Toggle the main window "always on top" flag; persists the preference and
+/// applies it to the live window immediately.
+#[tauri::command]
+pub fn set_always_on_top(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    on: bool,
+) -> Result<(), String> {
+    use tauri::Manager;
+    // одна write-блокировка: сохранить и применить — без гонок с save_settings
+    {
+        let mut s = state.settings.inner.write();
+        s.always_on_top = on;
+        state.settings.save(&s).map_err(|e| e.to_string())?;
+    }
+    if let Some(win) = app.get_webview_window("main") {
+        win.set_always_on_top(on).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Open a URL in the system browser (About section: project page).
 #[tauri::command]
 pub fn open_external(url: String) -> Result<(), String> {

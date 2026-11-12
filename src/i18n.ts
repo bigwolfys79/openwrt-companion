@@ -164,6 +164,10 @@ const EN: Dict = {
   "act.unblocked": "Device unblocked",
   "act.err": "Error: {e}",
   "ssh.keyLearned": "🔐 SSH host key of {host} pinned: {fp} (first connection — verify it matches your router)",
+  // settings: always on top
+  "set.aot": "Always on top",
+  "set.aotOn": "On top",
+  "set.aotOff": "Normal",
   // notifications
   "ntf.routerDown": "📡 Router unreachable",
   "ntf.devOnline": "🟢 Device connected",
@@ -315,6 +319,9 @@ const RU: Dict = {
   "act.unblocked": "Устройство разблокировано",
   "act.err": "Ошибка: {e}",
   "ssh.keyLearned": "🔐 SSH-ключ роутера {host} закреплён: {fp} (первое подключение — сверьте отпечаток с роутером)",
+  "set.aot": "Поверх всех окон",
+  "set.aotOn": "Поверх всех",
+  "set.aotOff": "Обычное",
   "ntf.routerDown": "📡 Роутер недоступен",
   "ntf.devOnline": "🟢 Устройство подключилось",
   "ntf.devOffline": "🔴 Устройство отключилось",

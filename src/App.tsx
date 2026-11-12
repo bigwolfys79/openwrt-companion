@@ -662,6 +662,7 @@ function SettingsView({
   const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [testing, setTesting] = useState(false);
   const [autoStart, setAutoStart] = useState(false);
+  const [aot, setAot] = useState(true);
   const [profileName, setProfileName] = useState("");
   const [notify, setNotify] = useState(true);
   const [version, setVersion] = useState("");
@@ -671,6 +672,7 @@ function SettingsView({
       const p = v.profiles?.[v.activeProfile];
       setProfileName(p?.name ?? "");
       setNotify(v.notify !== false);
+      setAot(v.alwaysOnTop !== false);
     });
   }, []);
 
@@ -717,6 +719,19 @@ function SettingsView({
       }
     } catch (e) {
       setStatus({ ok: false, msg: t("set.errPrefix", { ctx: t("set.autostart"), e: String(e) }) });
+    }
+  };
+
+  const toggleAot = async () => {
+    const next = !aot;
+    const prev = aot;
+    setAot(next); // оптимистично; при ошибке откатываем
+    try {
+      // бэкенд сохраняет настройку и применяет флаг к живому окну
+      await invoke("set_always_on_top", { on: next });
+    } catch (e) {
+      setAot(prev);
+      setStatus({ ok: false, msg: t("set.errPrefix", { ctx: t("set.aot"), e: String(e) }) });
     }
   };
 
@@ -874,6 +889,14 @@ function SettingsView({
         <div className="range-row">
           <button type="button" className={`btn ${notify ? "btn-primary" : "btn-ghost"}`} onClick={() => setNotify((v) => !v)}>
             {notify ? t("set.notifyOn") : t("set.notifyOff")}
+          </button>
+        </div>
+      </label>
+      <label>
+        {t("set.aot")}
+        <div className="range-row">
+          <button type="button" className={`btn ${aot ? "btn-primary" : "btn-ghost"}`} onClick={toggleAot}>
+            {aot ? t("set.aotOn") : t("set.aotOff")}
           </button>
         </div>
       </label>

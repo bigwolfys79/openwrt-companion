@@ -77,4 +77,5 @@ export interface Settings {
   activeProfile: number;
   language: string;
   theme: string;
+  alwaysOnTop: boolean;
 }

@@ -43,6 +43,9 @@ pub struct Settings {
     /// UI theme: "dark" | "light"
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// main window always on top (tray panel convenience; user-toggleable)
+    #[serde(default = "default_true")]
+    pub always_on_top: bool,
 }
 
 fn default_language() -> String {
@@ -93,6 +96,7 @@ impl Default for Settings {
             active_profile: 0,
             language: default_language(),
             theme: default_theme(),
+            always_on_top: true,
         }
     }
 }

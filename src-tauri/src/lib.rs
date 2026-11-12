@@ -21,6 +21,8 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             let store = settings::SettingsStore::load(&handle);
+            // читаем флаг до перемещения store в AppState
+            let aot_enabled = store.inner.read().always_on_top;
             ssh::init_hostkeys(
                 &handle.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
                 handle.clone(),
@@ -36,6 +38,14 @@ pub fn run() {
             monitor::start(handle.clone());
             // show the window on first launch so the user can enter settings
             tray::show_main_window(&handle, false);
+            // применяем сохранённый флаг "поверх всех окон" (окно создано из
+            // конфига с alwaysOnTop: true до setup, поэтому достаточно снять,
+            // если пользователь его выключал)
+            if !aot_enabled {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.set_always_on_top(false);
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -61,6 +71,7 @@ pub fn run() {
             commands::set_channel,
             commands::ssh_forget_host_key,
             commands::set_ui_prefs,
+            commands::set_always_on_top,
             commands::open_external,
             commands::acl_setup_command_cmd,
         ])
