@@ -1,6 +1,8 @@
 /* OpenWrt Companion — dark Fluent / acrylic style */
 
 :root {
+  /* нативные скроллбары WebView2 рисуются по color-scheme, а не по scrollbar-color */
+  color-scheme: dark;
   --bg: rgba(18, 20, 28, 0.97);
   --bg-elev: rgba(32, 36, 48, 0.75);
   --bg-card: rgba(255, 255, 255, 0.045);
@@ -20,6 +22,7 @@
 
 /* ---------- light theme ---------- */
 :root[data-theme="light"] {
+  color-scheme: light;
   --bg: rgba(243, 245, 250, 0.97);
   --bg-elev: rgba(255, 255, 255, 0.85);
   --bg-card: rgba(20, 30, 60, 0.05);
@@ -162,6 +165,14 @@ html, body {
 }
 .content::-webkit-scrollbar { width: 8px; }
 .content::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 4px; }
+
+/* скроллбары во всех прокручиваемых контейнерах (настройки, модалки и т.д.) — под тему */
+* { scrollbar-width: thin; scrollbar-color: var(--scrollbar) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--menu-hover); }
+::-webkit-scrollbar-corner { background: transparent; }
 
 /* ---------- stats ---------- */
 
