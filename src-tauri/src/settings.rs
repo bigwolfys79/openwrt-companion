@@ -49,9 +49,20 @@ pub struct Settings {
     /// don't show the main window on app launch (tray-only start)
     #[serde(default)]
     pub start_minimized: bool,
-    /// тарифный план в Мбит/с для шкалы трея (0 = авто-пороги 0.5/5/50 Мбит/с)
+    /// тарифный план в Мбит/с для шкалы трея; определяется автоматически
+    /// тестом скорости на роутере (0 = ещё не измерено → фиксированные пороги)
     #[serde(default)]
     pub tariff_mbit: u32,
+    /// время последнего успешного теста скорости (мс от эпохи; 0 = никогда)
+    #[serde(default)]
+    pub tariff_test_at: i64,
+    /// интервал автотеста: 0 = никогда (только вручную), 1 / 3 / 7 дней
+    #[serde(default = "default_tariff_days")]
+    pub tariff_test_days: u32,
+}
+
+fn default_tariff_days() -> u32 {
+    7
 }
 
 fn default_language() -> String {
@@ -105,6 +116,8 @@ impl Default for Settings {
             always_on_top: true,
             start_minimized: false,
             tariff_mbit: 0,
+            tariff_test_at: 0,
+            tariff_test_days: default_tariff_days(),
         }
     }
 }

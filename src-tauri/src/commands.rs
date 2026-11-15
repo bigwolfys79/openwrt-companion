@@ -53,7 +53,7 @@ pub async fn save_settings(
     stats_rows: u32,
     profile_name: Option<String>,
     notify: Option<bool>,
-    tariff_mbit: Option<u32>,
+    tariff_test_days: Option<u32>,
 ) -> Result<(), String> {
     // Единая write-блокировка на весь read-modify-write: параллельные команды
     // (set_alias / toggle_pin) не могут вклиниться между клоном и записью.
@@ -72,9 +72,9 @@ pub async fn save_settings(
         }
         s.poll_interval_secs = poll_interval_secs.clamp(2, 60);
         s.stats_rows = stats_rows.clamp(1, 3);
-        // тариф для шкалы трея: 0 = авто-пороги; ограничим разумным диапазоном
-        if let Some(t) = tariff_mbit {
-            s.tariff_mbit = t.clamp(0, 100_000);
+        // интервал автотеста скорости тарифа: 0 = никогда (только вручную)
+        if let Some(d) = tariff_test_days {
+            s.tariff_test_days = if matches!(d, 0 | 1 | 3 | 7) { d } else { s.tariff_test_days };
         }
         // persist the edited values into the active profile too (host/name/password),
         // so switching profiles later doesn't lose them
@@ -585,4 +585,12 @@ pub async fn set_channel(state: State<'_, AppState>, device: String, channel: i6
     // radio is what actually matters for the channel switch.
     let _ = client.call("uci", "apply", json!({"rollback": false})).await;
     Ok(())
+}
+
+/// Ручной тест скорости тарифа (кнопка в настройках): скачивание тестового
+/// файла на роутере через SSH, результат пишется в tariff_mbit и сразу
+/// применяется шкалой трея.
+#[tauri::command]
+pub async fn run_speedtest(state: State<'_, AppState>) -> Result<u32, String> {
+    crate::speedtest::measure_and_save(&state).await
 }

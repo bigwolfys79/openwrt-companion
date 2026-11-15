@@ -14,6 +14,7 @@ use russh::client::{self, Handle, Handler};
 use russh::keys::{HashAlg, PublicKeyOrCertificate};
 use russh::{ChannelMsg, Disconnect};
 use std::collections::HashMap;
+use std::time::Duration;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -195,7 +196,9 @@ async fn connect_verified(host: &str, user: &str, pass: &str) -> Result<Handle<H
 
 /// Run `cmd` on an already-authenticated handle; does NOT disconnect, so the
 /// caller decides whether the session stays pooled or is torn down.
-async fn exec_on(handle: &mut Handle<HostCheck>, cmd: &str) -> Result<Vec<u8>, String> {
+/// `chunk_timeout` bounds the wait for the *next* output chunk (60 с обычно;
+/// speedtest'у нужно больше — скачивание идёт молча до завершения).
+async fn exec_on_for(handle: &mut Handle<HostCheck>, cmd: &str, chunk_timeout: Duration) -> Result<Vec<u8>, String> {
     let mut channel = handle
         .channel_open_session()
         .await
@@ -209,12 +212,12 @@ async fn exec_on(handle: &mut Handle<HostCheck>, cmd: &str) -> Result<Vec<u8>, S
     // per-chunk timeout: a stalled router must not hang the caller forever
     // (previously this loop could hang indefinitely on `run_diag` / backups)
     loop {
-        match tokio::time::timeout(std::time::Duration::from_secs(60), channel.wait()).await {
+        match tokio::time::timeout(chunk_timeout, channel.wait()).await {
             Err(_) => {
                 let _ = handle
                     .disconnect(Disconnect::ByApplication, "timeout", "en")
                     .await;
-                return Err("SSH: превышен таймаут выполнения команды (60 с)".into());
+                return Err(format!("SSH: превышен таймаут выполнения команды ({:?})", chunk_timeout));
             }
             Ok(Some(ChannelMsg::Data { data })) => out.extend_from_slice(&data),
             Ok(Some(ChannelMsg::ExtendedData { data, .. })) => out.extend_from_slice(&data),
@@ -244,7 +247,19 @@ pub async fn run_command(host: &str, user: &str, pass: &str, cmd: &str) -> Resul
 /// `sysupgrade -b -` backup tarball streamed to stdout).
 pub async fn run_command_bytes(host: &str, user: &str, pass: &str, cmd: &str) -> Result<Vec<u8>, String> {
     let mut handle = connect_verified(host, user, pass).await?;
-    let out = exec_on(&mut handle, cmd).await;
+    let out = exec_on_for(&mut handle, cmd, Duration::from_secs(60)).await;
+    let _ = handle
+        .disconnect(Disconnect::ByApplication, "done", "en")
+        .await;
+    out
+}
+
+/// One-off command for long silent operations (speed test on the router:
+/// скачивание идёт без вывода до самого конца, поэтому обычный 60-секундный
+/// per-chunk таймаут обрывал бы даже успешное скачивание).
+pub async fn run_slow_command(host: &str, user: &str, pass: &str, cmd: &str) -> Result<Vec<u8>, String> {
+    let mut handle = connect_verified(host, user, pass).await?;
+    let out = exec_on_for(&mut handle, cmd, Duration::from_secs(300)).await;
     let _ = handle
         .disconnect(Disconnect::ByApplication, "done", "en")
         .await;
@@ -294,7 +309,7 @@ impl SshPool {
         };
 
         if let Some(h) = taken.as_mut() {
-            match exec_on(h, cmd).await {
+            match exec_on_for(h, cmd, Duration::from_secs(60)).await {
                 Ok(out) => {
                     self.put_back(host, user, pass, taken.take());
                     return Ok(out);
@@ -308,7 +323,7 @@ impl SshPool {
 
         // slow path: connect fresh, exec, keep the session for the next poll
         let mut handle = connect_verified(host, user, pass).await?;
-        let res = exec_on(&mut handle, cmd).await;
+        let res = exec_on_for(&mut handle, cmd, Duration::from_secs(60)).await;
         match res {
             Ok(out) => {
                 self.put_back(host, user, pass, Some(handle));

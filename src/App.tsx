@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
@@ -647,6 +647,18 @@ function DiagModal({ onClose, showToast }: { onClose: () => void; showToast: (m:
   );
 }
 
+/* Клик по пустой части строки `<label>` браузер «форвардит» в первый
+ * labelable-потомок (кнопку) — из-за этого кнопка срабатывала, даже когда
+ * курсор был не на ней. Гасим форвард, если клик пришёлся не на интерактивный
+ * элемент. */
+function interactive(t: EventTarget | null): boolean {
+  const tag = t instanceof HTMLElement ? t.tagName : "";
+  return tag === "BUTTON" || tag === "SELECT" || tag === "INPUT";
+}
+const noLabelForward = (e: MouseEvent) => {
+  if (!interactive(e.target)) e.preventDefault();
+};
+
 function SettingsView({
   onSaved, onClose, lang, theme, onLang, onTheme,
 }: {
@@ -666,6 +678,7 @@ function SettingsView({
   const [startMin, setStartMin] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [notify, setNotify] = useState(true);
+  const [testingSpeed, setTestingSpeed] = useState(false);
   const [version, setVersion] = useState("");
   const reloadSettings = useCallback(() => {
     invoke<Settings>("get_settings").then((v) => {
@@ -763,7 +776,7 @@ function SettingsView({
         statsRows: s.statsRows ?? 2,
         profileName,
         notify,
-        tariffMbit: s.tariffMbit ?? 0,
+        tariffTestDays: s.tariffTestDays ?? 7,
       });
       const model = await invoke<string>("test_connection");
       setStatus({ ok: true, msg: t("set.connected", { model }) });
@@ -825,7 +838,7 @@ function SettingsView({
           placeholder="••••••••"
         />
       </label>
-      <label>
+      <label htmlFor="_" onClick={noLabelForward}>
         {t("set.sshKey")}
         <div className="range-row">
           <button
@@ -875,7 +888,7 @@ function SettingsView({
           </div>
         </div>
       </label>
-      <label>
+      <label htmlFor="_" onClick={noLabelForward}>
         {t("set.language")}
         <div className="range-row">
           <select
@@ -888,7 +901,7 @@ function SettingsView({
           </select>
         </div>
       </label>
-      <label>
+      <label htmlFor="_" onClick={noLabelForward}>
         {t("set.theme")}
         <div className="range-row">
           <button type="button" className={`btn ${theme === "dark" ? "btn-primary" : "btn-ghost"}`} onClick={() => onTheme("dark")}>
@@ -899,22 +912,60 @@ function SettingsView({
           </button>
         </div>
       </label>
-      <label>
+      <label htmlFor="_" onClick={noLabelForward}>
         {t("set.tariff")}
+        <div className="range-row tariff-info">
+          {testingSpeed ? (
+            <span className="hint"><span className="spinner" /> {t("set.tariffTesting")}</span>
+          ) : (s.tariffMbit ?? 0) > 0 ? (
+            <span className="hint ok-hint">
+              {t("set.tariffMeasured", {
+                v: s.tariffMbit,
+                at: (s.tariffTestAt ?? 0) > 0 ? new Date(s.tariffTestAt).toLocaleString() : "—",
+              })}
+            </span>
+          ) : (
+            <span className="hint">{t("set.tariffPending")}</span>
+          )}
+          <button
+            type="button"
+            className="btn btn-ghost"
+            disabled={testingSpeed}
+            onClick={async () => {
+              setTestingSpeed(true);
+              setStatus(null);
+              try {
+                const mbit = await invoke<number>("run_speedtest");
+                setS((v) => (v ? { ...v, tariffMbit: mbit, tariffTestAt: Date.now() } : v));
+                setStatus({ ok: true, msg: t("set.tariffDone", { v: mbit }) });
+              } catch (e) {
+                setStatus({ ok: false, msg: t("set.tariffErr", { e: String(e) }) });
+              } finally {
+                setTestingSpeed(false);
+              }
+            }}
+          >
+            {t("set.tariffMeasure")}
+          </button>
+        </div>
         <div className="range-row">
-          <input
-            type="number"
-            className="channel-select"
-            min={0}
-            max={100000}
-            value={s.tariffMbit ?? 0}
-            title={t("set.tariffHint")}
-            onChange={(e) => setS({ ...s, tariffMbit: Math.max(0, Math.floor(Number(e.target.value) || 0)) })}
-          />
-          <span className="hint">{t("set.tariffHint")}</span>
+          <div className="seg-row">
+            {[1, 3, 7, 0].map((d) => (
+              <button
+                key={d}
+                type="button"
+                className={`seg ${((s.tariffTestDays ?? 7) === d) ? "active" : ""}`}
+                title={t("set.tariffDaysTitle")}
+                onClick={() => setS({ ...s, tariffTestDays: d })}
+              >
+                {d === 0 ? t("set.tariffNever") : d}
+              </button>
+            ))}
+          </div>
+          <span className="hint">{t("set.tariffDaysHint")}</span>
         </div>
       </label>
-      <label>
+      <label htmlFor="_" onClick={noLabelForward}>
         {t("set.notify")}
         <div className="range-row">
           <button type="button" className={`btn ${notify ? "btn-primary" : "btn-ghost"}`} onClick={() => setNotify((v) => !v)}>
@@ -922,7 +973,7 @@ function SettingsView({
           </button>
         </div>
       </label>
-      <label>
+      <label htmlFor="_" onClick={noLabelForward}>
         {t("set.aot")}
         <div className="range-row">
           <button type="button" className={`btn ${aot ? "btn-primary" : "btn-ghost"}`} onClick={toggleAot}>
@@ -930,7 +981,7 @@ function SettingsView({
           </button>
         </div>
       </label>
-      <label>
+      <label htmlFor="_" onClick={noLabelForward}>
         {t("set.startMin")}
         <div className="range-row">
           <button type="button" className={`btn ${startMin ? "btn-primary" : "btn-ghost"}`} onClick={toggleStartMin}>
@@ -938,7 +989,7 @@ function SettingsView({
           </button>
         </div>
       </label>
-      <label>
+      <label htmlFor="_" onClick={noLabelForward}>
         {t("set.autostart")}
         <div className="range-row">
           <button type="button" className={`btn ${autoStart ? "btn-primary" : "btn-ghost"}`} onClick={toggleAutoStart}>
@@ -1079,7 +1130,11 @@ export default function App() {
     const unKey = listen<{ host: string; fingerprint: string }>("ssh-hostkey-learned", (e) => {
       showToast(t("ssh.keyLearned", { host: e.payload.host, fp: e.payload.fingerprint }));
     });
-    return () => { un.then((f) => f()); unKey.then((f) => f()); };
+    // автотест скорости тарифа завершился — сообщаем результат
+    const unTariff = listen<{ mbit: number }>("tariff-detected", (e) => {
+      showToast(t("set.tariffDone", { v: e.payload.mbit }));
+    });
+    return () => { un.then((f) => f()); unKey.then((f) => f()); unTariff.then((f) => f()); };
   }, [diffNotify, showToast]);
 
   // keep a ref mirror so event handler can diff

@@ -80,4 +80,8 @@ export interface Settings {
   alwaysOnTop: boolean;
   startMinimized: boolean;
   tariffMbit: number;
+  /** время последнего успешного теста скорости, мс от эпохи (0 = никогда) */
+  tariffTestAt: number;
+  /** интервал автотеста: 0 = никогда (только вручную), 1 / 3 / 7 дней */
+  tariffTestDays: number;
 }

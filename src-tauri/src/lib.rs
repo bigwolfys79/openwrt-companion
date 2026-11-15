@@ -4,6 +4,7 @@ mod monitor;
 pub mod settings;
 pub mod snapshot;
 pub mod ssh;
+mod speedtest;
 mod tray;
 mod tray_anim;
 mod ubus;
@@ -79,6 +80,7 @@ pub fn run() {
             commands::set_start_minimized,
             commands::open_external,
             commands::acl_setup_command_cmd,
+            commands::run_speedtest,
         ])
         .run(tauri::generate_context!())
         .expect("error while running OpenWrt Companion");

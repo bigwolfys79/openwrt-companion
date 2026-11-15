@@ -2,7 +2,7 @@
 
 **English** | [Русский](README.md)
 
-![Version](https://img.shields.io/badge/version-1.2.1-blue) ![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey) ![License](https://img.shields.io/badge/license-CC%20BY--NC%204.0-orange)
+![Version](https://img.shields.io/badge/version-1.3.0-blue) ![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey) ![License](https://img.shields.io/badge/license-CC%20BY--NC%204.0-orange)
 
 A compact desktop companion for your **OpenWrt** router: a live "who's online and how the router is doing" panel + an animated tray icon. No cloud, no web UI — everything straight from your router.
 
@@ -15,6 +15,7 @@ A compact desktop companion for your **OpenWrt** router: a live "who's online an
 - **Real-time device list**: IP, name, type (PC/phone/TV/IoT), Wi-Fi signal, per-client speed ↓/↑
 - **Tabs**: Active / Wi-Fi / LAN / Blocked / Archive
 - **Animated tray icon**: 4 bars by traffic level, green/red flash when devices connect/disconnect, top-10 device menu with live speeds + Wi-Fi/router reboot right from the tray
+- **Automatic plan speed measurement**: the app measures your real channel capacity (4 parallel streams to the nearest CDN node, straight from the router) and scales the tray bars to it — no manual input needed; auto re-check every 1/3/7 days or manual only
 - **Windows notifications**: device connected/disconnected, router unreachable
 
 ### Interface
@@ -50,7 +51,7 @@ A compact desktop companion for your **OpenWrt** router: a live "who's online an
 
 ## 🚀 Installation
 
-1. Download `OpenWrt Companion_1.2.1_x64-setup.exe` from the [Releases](../../releases) page
+1. Download `OpenWrt Companion_1.3.0_x64-setup.exe` from the [Releases](../../releases) page
 2. Pick the installer language (english / русский) and install — settings open on first launch
 3. Enter the router address, username and password → "Test"
 
@@ -74,7 +75,7 @@ npm run tauri build
 | Channel | What it collects |
 |---|---|
 | **ubus via LuCI RPC** (`/ubus`, JSON-RPC) | Wi-Fi devices, interfaces, WAN counters, ARP, DHCP, uci, system board/info, iwinfo |
-| **SSH** (russh, password + key pinning) | diagnostics, `sysupgrade -b` backup, ACL auto-fix |
+| **SSH** (russh, password + key pinning) | diagnostics, `sysupgrade -b` backup, ACL auto-fix, plan speed test |
 
 Polling runs in the background (every 5 s by default, configurable 2–30 s); speeds are computed as counter differentials between polls.
 

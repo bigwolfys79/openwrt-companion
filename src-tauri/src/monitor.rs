@@ -26,6 +26,8 @@ pub fn start(app: AppHandle) {
                     let _ = app.emit("snapshot", s);
                     let _ = update_tray(&app, s, prev.as_ref());
                     prev = Some(s.clone());
+                    // автотест скорости тарифа по расписанию (1/3/7 дней)
+                    crate::speedtest::maybe_autotest(&app);
                 }
                 Err(e) => {
                     err_streak += 1;
